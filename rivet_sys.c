@@ -7,12 +7,14 @@
 
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <linux/fs.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -21,6 +23,29 @@
 typedef struct { const uint8_t *data; int64_t len; } rv_str;
 
 #define RV_COPY_BUF (1 << 20)
+
+/* Copies in-to-out with the kernel's help: an instant reflink where the
+   filesystem supports one (Btrfs, XFS, bcachefs), otherwise copy_file_range,
+   which copies inside the kernel without a user-space buffer. Returns 1 when
+   the whole file is copied, 0 when the caller must copy the rest itself (the
+   kernel cannot do this copy here), and -1 on error. On a partial copy the
+   file offsets have moved, so the caller's read/write loop continues where
+   this stopped. */
+static int kernel_copy(int in, int out, off_t size) {
+    off_t left = size;
+    if (ioctl(out, FICLONE, in) == 0) return 1;
+    while (left > 0) {
+        ssize_t n = copy_file_range(in, NULL, out, NULL, (size_t)left, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EXDEV || errno == ENOSYS || errno == EINVAL || errno == EOPNOTSUPP) return 0;
+            return -1;
+        }
+        if (n == 0) break;
+        left -= n;
+    }
+    return left == 0 ? 1 : 0;
+}
 
 /* A NUL-terminated copy of s, or NULL when memory runs out. */
 static char *rv_cpath(rv_str s) {
@@ -114,6 +139,11 @@ int32_t rv_copy_file(rv_str src, rv_str dst) {
     }
     out = open(d, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (out < 0) goto done;
+
+    int fast = kernel_copy(in, out, ss.st_size);
+    if (fast < 0) goto done;
+    if (fast == 1) goto finish;
+
     buf = malloc(RV_COPY_BUF);
     if (!buf) goto done;
 
@@ -130,6 +160,7 @@ int32_t rv_copy_file(rv_str src, rv_str dst) {
             off += w;
         }
     }
+finish:
     if (close(out) != 0) { out = -1; goto done; }
     out = -1;
     rc = 0;
@@ -198,6 +229,18 @@ done:
 /* 1 when standard input is a terminal, so the user can be asked a question. */
 int32_t rv_is_tty(void) {
     return isatty(0) ? 1 : 0;
+}
+
+/* 1 when file descriptor fd is a terminal, so progress lines may be shown. */
+int32_t rv_isatty(int32_t fd) {
+    return isatty(fd) ? 1 : 0;
+}
+
+/* 1 when colors may be used on fd: it is a terminal and NO_COLOR is not set
+   (https://no-color.org). */
+int32_t rv_color_ok(int32_t fd) {
+    if (getenv("NO_COLOR") != NULL) return 0;
+    return isatty(fd) ? 1 : 0;
 }
 
 /* Writes the absolute path of the running program into out, without a NUL,

@@ -1,22 +1,32 @@
 #!/usr/bin/env python3
-"""rivet-gui: a small Tkinter window in front of the rivet command.
+"""rivet-gui: a Tkinter window in front of the rivet command.
 
-It lists the installed AppImages, installs a file you pick, and uninstalls the
-selected one. Every change is made by running the rivet binary, so the GUI never
-writes the registry or the desktop files itself.
+It lists the installed AppImages, shows the details of the selected one,
+installs a file chosen in a dialog, and removes the selected app. Every change
+is made by running the rivet binary, so the GUI never writes the registry or
+the desktop files itself. Commands run in the background, so the window stays
+responsive.
 
 Set RIVET=/path/to/rivet to use a specific binary. Otherwise rivet is looked up
 on PATH, and then next to this script.
 """
 
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 
+APP_NAME = "Rivet"
 YES_HINT = "Pass --yes"
 SPLIT_COLUMNS = re.compile(r"\s{2,}")
+EMPTY_TEXT = (
+    "No AppImages installed yet.\n\n"
+    "Choose Install AppImage, or press Ctrl+O, to add one."
+)
+SELECT_TEXT = "Select an app to see its details."
 
 
 def find_rivet():
@@ -49,12 +59,16 @@ def run_rivet(rivet, args):
     return proc.returncode, proc.stdout.strip()
 
 
-def parse_list(text):
-    """Reads the output of `rivet list` into (name, version, size) tuples.
+# --- pure helpers (no window needed) -------------------------------------------
 
-    Rows are split on runs of two or more spaces, because a size such as
-    "182 MB" contains a single space. Lines before the column header, and the
-    rule under it, are skipped.
+
+def parse_list(text):
+    """Reads the output of `rivet list` into (name, version, size, installed) tuples.
+
+    Columns are split on runs of two or more spaces, because a size such as
+    "182 MB" or a date such as "2026-11-11 05:08 UTC" contains single spaces.
+    Lines before the column header, and the rule under it, are skipped. Older
+    output without the install column gets an empty last cell.
     """
     rows = []
     in_table = False
@@ -69,11 +83,47 @@ def parse_list(text):
         cells = SPLIT_COLUMNS.split(stripped)
         if len(cells) < 2:
             continue
-        name = cells[0]
-        version = cells[1] if len(cells) > 1 else ""
-        size = cells[2] if len(cells) > 2 else ""
-        rows.append((name, version, size))
+        cells += [""] * (4 - len(cells))
+        rows.append(tuple(cells[:4]))
     return rows
+
+
+def filter_rows(rows, query):
+    """The rows whose name or version contains query, ignoring case."""
+    q = query.strip().lower()
+    if not q:
+        return list(rows)
+    return [r for r in rows if q in r[0].lower() or q in r[1].lower()]
+
+
+def describe_count(n):
+    """The count shown in the header."""
+    if n == 0:
+        return "No apps installed"
+    if n == 1:
+        return "1 app installed"
+    return f"{n} apps installed"
+
+
+def needs_confirmation(status, out):
+    """True when rivet refused an install and asked for --yes to replace a version."""
+    return status != 0 and YES_HINT in out
+
+
+def install_args(path):
+    return ["install", path]
+
+
+def install_yes_args(path):
+    return ["install", "--yes", path]
+
+
+def uninstall_args(name):
+    return ["uninstall", name]
+
+
+def info_args(name):
+    return ["info", name]
 
 
 def list_apps(rivet):
@@ -88,24 +138,23 @@ def install_file(rivet, path, confirm):
     """Installs path, asking before replacing an installed version.
 
     confirm(question) is called with the text rivet would have printed, and
-    returns True to replace. Returns (ok, message).
+    returns True to replace. Returns (ok, message). The window does the same in
+    steps, so its dialogs stay on the main thread.
     """
-    status, out = run_rivet(rivet, ["install", path])
+    status, out = run_rivet(rivet, install_args(path))
     if status == 0:
         return True, out
-    if YES_HINT not in out:
+    if not needs_confirmation(status, out):
         return False, out or "install failed"
-    # rivet refused to replace an installed version without a terminal. Show
-    # its message and ask here instead, then repeat the install with --yes.
     if not confirm(out):
         return False, "Nothing was changed."
-    status, out = run_rivet(rivet, ["install", "--yes", path])
+    status, out = run_rivet(rivet, install_yes_args(path))
     return status == 0, out or ("installed" if status == 0 else "install failed")
 
 
 def uninstall_app(rivet, name):
     """Removes an installed app. Returns (ok, message)."""
-    status, out = run_rivet(rivet, ["uninstall", name])
+    status, out = run_rivet(rivet, uninstall_args(name))
     return status == 0, out or ("removed" if status == 0 else "uninstall failed")
 
 
@@ -120,76 +169,222 @@ def main():
 
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
+    from tkinter import font as tkfont
 
     root = tk.Tk()
-    root.title("Rivet")
-    root.minsize(520, 320)
+    root.title(APP_NAME)
+    root.geometry("880x540")
+    root.minsize(660, 420)
 
-    frame = ttk.Frame(root, padding=12)
-    frame.pack(fill="both", expand=True)
+    style = ttk.Style(root)
+    if "clam" in style.theme_names():
+        style.theme_use("clam")
+    title_font = tkfont.nametofont("TkDefaultFont").copy()
+    title_font.configure(size=22, weight="bold")
+    mono_font = tkfont.nametofont("TkFixedFont")
+    style.configure("Title.TLabel", font=title_font, foreground="#0b7285")
+    style.configure("Muted.TLabel", foreground="#6b7280")
+    style.configure("Treeview", rowheight=28)
 
-    table = ttk.Treeview(frame, columns=("name", "version", "size"), show="headings", selectmode="browse")
-    table.heading("name", text="Name")
-    table.heading("version", text="Version")
-    table.heading("size", text="Size")
-    table.column("name", width=220)
-    table.column("version", width=120)
-    table.column("size", width=100, anchor="e")
-    table.pack(fill="both", expand=True)
+    # Header: the product name and a live count.
+    count_var = tk.StringVar(value="")
+    header = ttk.Frame(root, padding=(18, 14, 18, 4))
+    header.pack(fill="x")
+    ttk.Label(header, text=APP_NAME, style="Title.TLabel").pack(side="left")
+    ttk.Label(header, textvariable=count_var, style="Muted.TLabel").pack(side="left", padx=(14, 0), pady=(10, 0))
 
+    # Toolbar: actions on the left, search on the right.
+    toolbar = ttk.Frame(root, padding=(18, 6, 18, 10))
+    toolbar.pack(fill="x")
+    install_btn = ttk.Button(toolbar, text="Install AppImage…", command=lambda: on_install())
+    uninstall_btn = ttk.Button(toolbar, text="Uninstall", command=lambda: on_uninstall())
+    refresh_btn = ttk.Button(toolbar, text="Refresh", command=lambda: refresh())
+    install_btn.pack(side="left")
+    uninstall_btn.pack(side="left", padx=(8, 0))
+    refresh_btn.pack(side="left", padx=(8, 0))
+    search_var = tk.StringVar(value="")
+    ttk.Entry(toolbar, textvariable=search_var, width=24).pack(side="right")
+    ttk.Label(toolbar, text="Search", style="Muted.TLabel").pack(side="right", padx=(0, 8))
+
+    # Status bar, packed before the body so it stays at the bottom.
     status_var = tk.StringVar(value="")
-    ttk.Label(frame, textvariable=status_var, wraplength=500, justify="left").pack(fill="x", pady=(8, 8))
+    status_bar = ttk.Frame(root, padding=(18, 6, 18, 10))
+    status_bar.pack(side="bottom", fill="x")
+    ttk.Label(status_bar, textvariable=status_var, style="Muted.TLabel").pack(side="left")
+    progress = ttk.Progressbar(status_bar, mode="indeterminate", length=140)
+    progress.pack(side="right")
 
-    buttons = ttk.Frame(frame)
-    buttons.pack(fill="x")
+    # Body: the app list, and a details pane beside it.
+    body = ttk.PanedWindow(root, orient="horizontal")
+    body.pack(fill="both", expand=True, padx=18)
+    left = ttk.Frame(body)
+    right = ttk.Frame(body, padding=(14, 0, 0, 0))
+    body.add(left, weight=3)
+    body.add(right, weight=2)
+
+    table = ttk.Treeview(
+        left, columns=("name", "version", "size", "installed"), show="headings", selectmode="browse"
+    )
+    for col, text, width, anchor in (
+        ("name", "Name", 170, "w"),
+        ("version", "Version", 100, "w"),
+        ("size", "Size", 90, "e"),
+        ("installed", "Installed", 200, "w"),
+    ):
+        table.heading(col, text=text, anchor="w")
+        table.column(col, width=width, anchor=anchor, stretch=(col == "installed"))
+    scroll = ttk.Scrollbar(left, orient="vertical", command=table.yview)
+    table.configure(yscrollcommand=scroll.set)
+    table.pack(side="left", fill="both", expand=True)
+    scroll.pack(side="right", fill="y")
+
+    detail = tk.Text(
+        right, wrap="word", width=34, font=mono_font, relief="flat",
+        padx=12, pady=10, background="#f8fafc", borderwidth=0,
+    )
+    detail.pack(fill="both", expand=True)
+
+    # Shared state. rows_all holds the last list; selected remembers the app
+    # so it stays selected after a refresh.
+    rows_all = []
+    selected = {"name": None}
+    busy = {"count": 0}
+    results = queue.Queue()
+    action_buttons = (install_btn, uninstall_btn, refresh_btn)
+
+    def set_detail(text):
+        detail.configure(state="normal")
+        detail.delete("1.0", "end")
+        detail.insert("1.0", text)
+        detail.configure(state="disabled")
+
+    def set_busy(delta):
+        busy["count"] = max(0, busy["count"] + delta)
+        if busy["count"]:
+            progress.start(12)
+            for button in action_buttons:
+                button.state(["disabled"])
+        else:
+            progress.stop()
+            for button in action_buttons:
+                button.state(["!disabled"])
+
+    def submit(kind, args, context=None, text=None):
+        """Runs rivet in a thread. The result comes back through the queue."""
+        counted = kind != "info"
+        if counted:
+            set_busy(1)
+        if text:
+            status_var.set(text)
+
+        def work():
+            status, out = run_rivet(rivet, args)
+            results.put((kind, context, status, out, counted))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_rows():
+        table.delete(*table.get_children())
+        shown = filter_rows(rows_all, search_var.get())
+        for row in shown:
+            iid = table.insert("", "end", values=row)
+            if row[0] == selected["name"]:
+                table.selection_set(iid)
+        count_var.set(describe_count(len(rows_all)))
+        if not table.selection():
+            set_detail(EMPTY_TEXT if not rows_all else SELECT_TEXT)
 
     def refresh():
-        table.delete(*table.get_children())
-        rows, error = list_apps(rivet)
-        if error:
-            status_var.set(error)
-            return
-        for row in rows:
-            table.insert("", "end", values=row)
-        status_var.set(f"{len(rows)} installed")
+        submit("list", ["list"], None, "Loading…")
 
-    def ask(question):
-        return messagebox.askyesno("Rivet", question + "\n\nReplace the installed version?")
+    def on_select(_event=None):
+        sel = table.selection()
+        if not sel:
+            selected["name"] = None
+            set_detail(EMPTY_TEXT if not rows_all else SELECT_TEXT)
+            return
+        name = table.item(sel[0], "values")[0]
+        selected["name"] = name
+        submit("info", info_args(name), name)
 
     def on_install():
         path = filedialog.askopenfilename(
+            parent=root,
             title="Choose an AppImage",
             filetypes=[("AppImage files", "*.AppImage *.appimage"), ("All files", "*")],
         )
-        if not path:
-            return
-        ok, message = install_file(rivet, path, ask)
-        if ok:
-            status_var.set(message)
-        else:
-            messagebox.showerror("Rivet", message)
-        refresh()
+        if path:
+            submit("install", install_args(path), path, f"Installing {os.path.basename(path)}…")
 
     def on_uninstall():
-        selected = table.selection()
-        if not selected:
+        sel = table.selection()
+        if not sel:
             status_var.set("Select an app to uninstall.")
             return
-        name = table.item(selected[0], "values")[0]
-        if not messagebox.askyesno("Rivet", f"Remove {name}?"):
+        name, version = table.item(sel[0], "values")[:2]
+        if not messagebox.askyesno(
+            APP_NAME,
+            f"Remove {name} {version}?\n\nIts AppImage, menu entry, and icon will be deleted.",
+            parent=root,
+        ):
             return
-        ok, message = uninstall_app(rivet, name)
-        if ok:
-            status_var.set(message)
-        else:
-            messagebox.showerror("Rivet", message)
-        refresh()
+        submit("uninstall", uninstall_args(name), name, f"Removing {name}…")
 
-    ttk.Button(buttons, text="Install AppImage...", command=on_install).pack(side="left")
-    ttk.Button(buttons, text="Uninstall", command=on_uninstall).pack(side="left", padx=(8, 0))
-    ttk.Button(buttons, text="Refresh", command=refresh).pack(side="right")
+    def handle(kind, context, status, out, counted):
+        if counted:
+            set_busy(-1)
+        if kind == "list":
+            if status == 0:
+                rows_all[:] = parse_list(out)
+                show_rows()
+                status_var.set("")
+            else:
+                rows_all[:] = []
+                show_rows()
+                status_var.set(out or "Could not list the installed apps.")
+        elif kind == "info":
+            if context == selected["name"]:
+                set_detail(out if status == 0 else (out or "Could not read this app."))
+        elif kind == "install":
+            if status == 0:
+                status_var.set(out)
+                refresh()
+            elif needs_confirmation(status, out):
+                if messagebox.askyesno(APP_NAME, out + "\n\nReplace the installed version?", parent=root):
+                    submit("install", install_yes_args(context), context,
+                           f"Replacing with {os.path.basename(context)}…")
+                else:
+                    status_var.set("Nothing was changed.")
+            else:
+                messagebox.showerror(APP_NAME, out or "The install failed.", parent=root)
+                status_var.set("Install failed.")
+        elif kind == "uninstall":
+            if status == 0:
+                status_var.set(out)
+                selected["name"] = None
+                refresh()
+            else:
+                messagebox.showerror(APP_NAME, out or "The app could not be removed.", parent=root)
+                status_var.set("Uninstall failed.")
 
+    def poll():
+        while True:
+            try:
+                item = results.get_nowait()
+            except queue.Empty:
+                break
+            handle(*item)
+        root.after(100, poll)
+
+    search_var.trace_add("write", lambda *_: show_rows())
+    table.bind("<<TreeviewSelect>>", on_select)
+    table.bind("<Delete>", lambda _e: on_uninstall())
+    root.bind("<Control-o>", lambda _e: on_install())
+    root.bind("<F5>", lambda _e: refresh())
+
+    set_detail(SELECT_TEXT)
     refresh()
+    root.after(100, poll)
     root.mainloop()
     return 0
 

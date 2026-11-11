@@ -27,11 +27,11 @@ loader.exec_module(gui)
 LIST_OUTPUT = """\
  Installed AppImages (3)
 
- Name           Version     Size
- ───────────────────────────────
- Krita          5.2.1       182 MB
- Obsidian       1.5.8       148 MB
- Neovim         0.9.5       12 MB
+ Name           Version     Size       Installed
+ ────────────────────────────────────────────────────
+ Krita          5.2.1       182 MB     2026-11-11 05:08 UTC
+ Obsidian       1.5.8       148 MB     2026-11-10 17:42 UTC
+ Neovim         0.9.5       12 MB      2026-11-09 09:00 UTC
 """
 
 
@@ -39,8 +39,16 @@ class ParseList(unittest.TestCase):
     def test_rows_are_read_in_order(self):
         self.assertEqual(
             gui.parse_list(LIST_OUTPUT),
-            [("Krita", "5.2.1", "182 MB"), ("Obsidian", "1.5.8", "148 MB"), ("Neovim", "0.9.5", "12 MB")],
+            [
+                ("Krita", "5.2.1", "182 MB", "2026-11-11 05:08 UTC"),
+                ("Obsidian", "1.5.8", "148 MB", "2026-11-10 17:42 UTC"),
+                ("Neovim", "0.9.5", "12 MB", "2026-11-09 09:00 UTC"),
+            ],
         )
+
+    def test_older_output_without_the_install_column_still_parses(self):
+        text = " Installed AppImages (1)\n\n Name  Version  Size\n ----\n Krita  5.2.1  182 MB\n"
+        self.assertEqual(gui.parse_list(text), [("Krita", "5.2.1", "182 MB", "")])
 
     def test_the_empty_message_gives_no_rows(self):
         self.assertEqual(gui.parse_list("no AppImages installed\n"), [])
@@ -48,6 +56,37 @@ class ParseList(unittest.TestCase):
     def test_a_row_with_only_a_name_is_skipped(self):
         text = " Name  Version  Size\n ----\n Tool  \n"
         self.assertEqual(gui.parse_list(text), [])
+
+
+class Filtering(unittest.TestCase):
+    ROWS = [("Krita", "5.2.1", "1 MB", ""), ("Neovim", "0.9.5", "2 MB", "")]
+
+    def test_an_empty_query_keeps_everything(self):
+        self.assertEqual(gui.filter_rows(self.ROWS, "  "), self.ROWS)
+
+    def test_the_query_matches_names_ignoring_case(self):
+        self.assertEqual(gui.filter_rows(self.ROWS, "NEO"), [self.ROWS[1]])
+
+    def test_the_query_matches_versions(self):
+        self.assertEqual(gui.filter_rows(self.ROWS, "5.2"), [self.ROWS[0]])
+
+    def test_counts_read_naturally(self):
+        self.assertEqual(gui.describe_count(0), "No apps installed")
+        self.assertEqual(gui.describe_count(1), "1 app installed")
+        self.assertEqual(gui.describe_count(3), "3 apps installed")
+
+
+class Confirmation(unittest.TestCase):
+    def test_only_a_refused_install_asks(self):
+        self.assertTrue(gui.needs_confirmation(1, "X 1.0 is installed. Pass --yes to replace it."))
+        self.assertFalse(gui.needs_confirmation(0, "installed X"))
+        self.assertFalse(gui.needs_confirmation(1, "rivet: no such file"))
+
+    def test_the_argument_lists_are_right(self):
+        self.assertEqual(gui.install_args("/a.AppImage"), ["install", "/a.AppImage"])
+        self.assertEqual(gui.install_yes_args("/a.AppImage"), ["install", "--yes", "/a.AppImage"])
+        self.assertEqual(gui.uninstall_args("Krita"), ["uninstall", "Krita"])
+        self.assertEqual(gui.info_args("krita"), ["info", "krita"])
 
 
 class FakeRivet(unittest.TestCase):
@@ -121,6 +160,104 @@ class FindRivet(unittest.TestCase):
                 del os.environ["RIVET"]
             else:
                 os.environ["RIVET"] = old
+
+
+class WindowBuilds(unittest.TestCase):
+    """Builds the window against a mock tkinter. This catches names that do not
+    exist in the window code, which the other tests never reach. It does not
+    check how the window looks."""
+
+    def test_the_window_is_built_and_its_loop_started(self):
+        from unittest import mock
+
+        fake_tk = mock.MagicMock()
+        env = {"RIVET": RIVET, "HOME": tempfile.mkdtemp(), "XDG_DATA_HOME": tempfile.mkdtemp()}
+        self.addCleanup(shutil.rmtree, env["HOME"], True)
+        self.addCleanup(shutil.rmtree, env["XDG_DATA_HOME"], True)
+        with mock.patch.dict(sys.modules, {"tkinter": fake_tk}), mock.patch.dict(os.environ, env):
+            if not os.access(RIVET, os.X_OK):
+                self.skipTest("rivet is not built")
+            self.assertEqual(gui.main(), 0)
+        fake_tk.Tk.return_value.mainloop.assert_called_once()
+
+
+class WindowFlow(unittest.TestCase):
+    """Runs the window's own callbacks against a mock tkinter. rivet is replaced
+    by canned output, and the background thread runs at once, so each step is
+    deterministic. This checks the logic of the window, not its appearance."""
+
+    LIST = (" Installed AppImages (1)\n\n Name  Version  Size  Installed\n"
+            " ----\n Ferret  1.0  16 KB  2026-11-11 05:08 UTC\n")
+
+    class ImmediateThread:
+        def __init__(self, target, daemon=False):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    def canned(self, rivet, args):
+        self.calls.append(list(args))
+        if args[0] == "list":
+            return 0, self.LIST
+        if args[:2] == ["install", "--yes"]:
+            return 0, "updated Ferret 1.0 to Ferret 1.1"
+        if args[0] == "install":
+            return 1, "Ferret 1.0 is installed. Pass --yes to replace it with Ferret 1.1."
+        return 0, ""
+
+    def test_an_update_from_the_window_asks_then_replaces(self):
+        from unittest import mock
+
+        self.calls = []
+        fake_tk = mock.MagicMock()
+        fake_tk.StringVar.return_value.get.return_value = ""
+        fake_tk.filedialog.askopenfilename.return_value = "/x/Ferret-1.1-x86_64.AppImage"
+        fake_tk.messagebox.askyesno.return_value = True
+        env = {"RIVET": RIVET, "HOME": tempfile.mkdtemp(), "XDG_DATA_HOME": tempfile.mkdtemp()}
+        self.addCleanup(shutil.rmtree, env["HOME"], True)
+        self.addCleanup(shutil.rmtree, env["XDG_DATA_HOME"], True)
+        if not os.access(RIVET, os.X_OK):
+            self.skipTest("rivet is not built")
+        with mock.patch.dict(sys.modules, {"tkinter": fake_tk}), \
+                mock.patch.dict(os.environ, env), \
+                mock.patch("threading.Thread", self.ImmediateThread), \
+                mock.patch.object(gui, "run_rivet", self.canned):
+            self.assertEqual(gui.main(), 0)
+            poll = fake_tk.Tk.return_value.after.call_args[0][1]
+            # Press the Install button, as a user would.
+            install = next(c for c in fake_tk.ttk.Button.call_args_list
+                           if c.kwargs.get("text") == "Install AppImage…")
+            install.kwargs["command"]()
+            poll()
+
+        self.assertIn(["install", "/x/Ferret-1.1-x86_64.AppImage"], self.calls)
+        self.assertIn(["install", "--yes", "/x/Ferret-1.1-x86_64.AppImage"], self.calls)
+        fake_tk.messagebox.askyesno.assert_called()
+        said = [c.args[0] for c in fake_tk.StringVar.return_value.set.call_args_list]
+        self.assertIn("updated Ferret 1.0 to Ferret 1.1", said)
+
+    def test_the_list_fills_the_table(self):
+        from unittest import mock
+
+        self.calls = []
+        fake_tk = mock.MagicMock()
+        fake_tk.StringVar.return_value.get.return_value = ""
+        env = {"RIVET": RIVET, "HOME": tempfile.mkdtemp(), "XDG_DATA_HOME": tempfile.mkdtemp()}
+        self.addCleanup(shutil.rmtree, env["HOME"], True)
+        self.addCleanup(shutil.rmtree, env["XDG_DATA_HOME"], True)
+        if not os.access(RIVET, os.X_OK):
+            self.skipTest("rivet is not built")
+        with mock.patch.dict(sys.modules, {"tkinter": fake_tk}), \
+                mock.patch.dict(os.environ, env), \
+                mock.patch("threading.Thread", self.ImmediateThread), \
+                mock.patch.object(gui, "run_rivet", self.canned):
+            gui.main()
+            poll = fake_tk.Tk.return_value.after.call_args[0][1]
+            poll()
+        table = fake_tk.ttk.Treeview.return_value
+        values = [c.kwargs.get("values") for c in table.insert.call_args_list]
+        self.assertEqual(values, [("Ferret", "1.0", "16 KB", "2026-11-11 05:08 UTC")])
 
 
 class RealRivet(unittest.TestCase):

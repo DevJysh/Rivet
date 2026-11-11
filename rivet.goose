@@ -26,6 +26,8 @@ extern fn rv_copy_file(src: const u8[:], dst: const u8[:]) -> i32;  // 0 ok, -1 
 extern fn rv_chmod(path: const u8[:], mode: i32) -> i32;
 extern fn rv_run(dir: const u8[:], prog: const u8[:], a1: const u8[:], a2: const u8[:], a3: const u8[:]) -> i32;
 extern fn rv_is_tty() -> i32;                                   // 1 when stdin is a terminal
+extern fn rv_isatty(fd: i32) -> i32;                            // 1 when fd is a terminal
+extern fn rv_color_ok(fd: i32) -> i32;                          // 1 when fd is a terminal and NO_COLOR is unset
 extern fn rv_self_exe(out: u8[:]) -> i64;                       // this program's absolute path; -1 if unknown
 extern fn rv_remove_tree(path: const u8[:]) -> i32;
 
@@ -68,7 +70,58 @@ var data_home: u8[>..];
 // --- small helpers ------------------------------------------------------------
 
 fn fail(msg: u8[:]) {
-    write_stderr(str("rivet: ", msg, "\n"));
+    write_stderr(str(styled("1;31", "rivet:", 2), " ", msg, "\n"));
+}
+
+// s wrapped in an ANSI style such as "1;32" (bold green), but only when fd is a
+// terminal and NO_COLOR is not set. Otherwise s comes back unchanged, so
+// scripts and pipes never see escape codes.
+fn styled(code: u8[:], s: u8[:], fd: i32) -> u8[>..] {
+    var out: u8[>..] = [];
+    if rv_color_ok(fd) == 1 {
+        format(out, "\x1b[", code, "m", s, "\x1b[0m");
+    } else {
+        format(out, s);
+    }
+    return out;
+}
+
+// A progress line for someone at a terminal. Scripts and pipes see nothing extra.
+fn note(msg: u8[:]) {
+    if rv_isatty(2) == 1 {
+        write_stderr(str(styled("2", msg, 2), "\n"));
+    }
+}
+
+// Two digits, with a leading zero for values below ten.
+fn two_digits(v: i64) -> u8[>..] {
+    var out: u8[>..] = [];
+    if v < 10 {
+        format(out, "0", v);
+    } else {
+        format(out, v);
+    }
+    return out;
+}
+
+// A unix time as "YYYY-MM-DD HH:MM" in UTC. Uses the civil-from-days
+// calculation, so it needs no time zone database.
+fn date_text(secs: i64) -> u8[>..] {
+    let days = secs / 86400;
+    let rest = secs - days * 86400;
+    let z = days + 719468;
+    let era = z / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { yoe + era * 400 + 1 } else { yoe + era * 400 };
+    var out: u8[>..] = [];
+    format(out, year, "-", two_digits(month), "-", two_digits(day), " ",
+           two_digits(rest / 3600), ":", two_digits(rest / 60 % 60), " UTC");
+    return out;
 }
 
 fn set_data_home() -> bool {
@@ -176,11 +229,30 @@ fn quote_exec(out: u8[>..]&, path: u8[:]) {
     out.push('"');
 }
 
-fn desktop_text(out: u8[>..]&, name: u8[:], exec: u8[:], icon: u8[:]) {
+// The menu entry for an app. It has an Uninstall action, which the launcher
+// shows in the context menu. The action runs this rivet binary, so it is left
+// out when that binary's path is not known.
+fn desktop_text(out: u8[>..]&, name: u8[:], exec: u8[:], icon: u8[:], rivet: u8[:], id: u8[:]) {
     format(out, "[Desktop Entry]\nType=Application\nName=", name, "\nExec=");
     quote_exec(out, exec);
     format(out, " %U\nTerminal=false\nCategories=Utility;\n");
     if icon.len > 0 { format(out, "Icon=", icon, "\n"); }
+    if rivet.len > 0 {
+        format(out, "Actions=Uninstall;\n\n[Desktop Action Uninstall]\nName=Uninstall\nExec=");
+        quote_exec(out, rivet);
+        format(out, " uninstall ", id, "\n");
+    }
+}
+
+// This program's absolute path, or an empty string when it cannot be found.
+fn self_path() -> u8[>..] {
+    var buf: u8[4096] = [0; 4096];
+    let n = rv_self_exe(buf[..]);
+    var out: u8[>..] = [];
+    if n > 0 {
+        format(out, buf[..n]);
+    }
+    return out;
 }
 
 // Left-justified in a column of the given width, with a space after it.
@@ -409,31 +481,39 @@ fn confirm(question: u8[:]) -> bool {
 // versions decide: the same version is refused, and a different one is
 // replaced after a yes from the user. Without a terminal, or without --yes,
 // nothing is replaced.
-fn install(src: u8[:], yes: bool) -> i32 {
+// Checks that src is an AppImage and reads its name, version, and id from the
+// file name. Reports the problem and returns false when it is not one.
+fn read_identity(src: u8[:], name: u8[>..]&, version: u8[>..]&, id: u8[>..]&) -> bool {
     if !file_exists(src) {
         fail(str("no such file: ", src));
-        return 1;
+        return false;
     }
     // The file is run to extract its icon, so it must carry the AppImage
     // signature first: an ELF header alone is not enough.
     if rv_file_magic(src) != ELF_MAGIC || rv_appimage_type(src) == 0 {
         fail(str(src, " is not an AppImage"));
-        return 1;
+        return false;
     }
-
-    let base = basename(src);
-    var name:    u8[>..] = [];
-    var version: u8[>..] = [];
-    if !split_file_name(base, name, version) {
+    if !split_file_name(basename(src), name, version) {
         fail("cannot read an app name from the file name");
-        return 1;
+        return false;
     }
-    var id: u8[>..] = [];
     make_id(name, id);
     if id.len == 0 || id.len > MAX_ID {
         fail("the app name is empty or too long");
+        return false;
+    }
+    return true;
+}
+
+fn install(src: u8[:], yes: bool) -> i32 {
+    var name:    u8[>..] = [];
+    var version: u8[>..] = [];
+    var id:      u8[>..] = [];
+    if !read_identity(src, name, version, id) {
         return 1;
     }
+    let base = basename(src);
 
     var apps = load_registry();
     var replacing = false;
@@ -473,6 +553,7 @@ fn install(src: u8[:], yes: bool) -> i32 {
     }
 
     // Copy the AppImage into Rivet's own folder, executable.
+    note("copying the AppImage");
     make_dirs(apps_path());
     var fname: u8[>..] = [];
     format(fname, base);
@@ -490,16 +571,18 @@ fn install(src: u8[:], yes: bool) -> i32 {
     rv_chmod(dest, EXEC_MODE);
 
     // The icon is optional: a missing one just means the default icon.
+    note("extracting the icon");
     let icon = extract_icon(dest, id);
 
     // Write the menu entry, then record the install. If either step fails,
     // the new copy and its icon are removed. The old version of an app that is
     // being replaced is never touched on failure.
+    note("writing the menu entry");
     let desk_dir = desktop_path();
     make_dirs(desk_dir);
     let desk = str(desk_dir, "/rivet-", id, ".desktop");
     var text: u8[>..] = [];
-    desktop_text(text, name, dest, icon);
+    desktop_text(text, name, dest, icon, self_path(), id);
     if !write_file(desk, text) {
         delete_file(dest);
         if !replacing && icon.len > 0 { delete_file(icon); }
@@ -539,11 +622,11 @@ fn install(src: u8[:], yes: bool) -> i32 {
 
     refresh_desktop_db();
     if !replacing {
-        print("installed ", label(name, version));
+        print(styled("1;32", "installed", 1), " ", label(name, version));
     } else if change < 0 {
-        print("updated ", old_label, " to ", label(name, version));
+        print(styled("1;32", "updated", 1), " ", old_label, " to ", label(name, version));
     } else {
-        print("replaced ", old_label, " with the older ", label(name, version));
+        print(styled("1;33", "replaced", 1), " ", old_label, " with the older ", label(name, version));
     }
     return 0;
 }
@@ -584,7 +667,7 @@ fn uninstall(name: u8[:]) -> i32 {
     delete_file(gone_desk);
     if gone_icon.len > 0 { delete_file(gone_icon); }
     refresh_desktop_db();
-    print("removed ", shown);
+    print(styled("1;32", "removed", 1), " ", shown);
     return 0;
 }
 
@@ -632,31 +715,150 @@ fn register_handler() -> i32 {
 fn list_apps() -> i32 {
     let apps = load_registry();
     if apps.len == 0 {
-        print("no AppImages installed");
+        print("no AppImages installed. Add one with: rivet install <file.AppImage>");
         return 0;
     }
-    print(" Installed AppImages (", apps.len, ")");
+    print(" ", styled("1", str("Installed AppImages (", apps.len, ")"), 1));
     print();
-    print(" ", column("Name", 14), column("Version", 11), "Size");
+    var head: u8[>..] = [];
+    format(head, column("Name", 14), column("Version", 11), column("Size", 10), "Installed");
+    print(" ", styled("1", head, 1));
     var rule: u8[>..] = [];
-    for i in 31 { rule.append("─"); }
-    print(" ", rule);
+    for i in 52 { rule.append("─"); }
+    print(" ", styled("2", rule, 1));
     for e in apps {
-        print(" ", column(e.name, 14), column(e.version, 11), size_text(e.size_bytes));
+        print(" ", column(e.name, 14), column(e.version, 11), column(size_text(e.size_bytes), 10),
+              date_text(e.installed_at));
     }
     return 0;
 }
 
+// " (missing)" when the file a record points at is gone, otherwise nothing.
+fn missing_note(path: u8[:]) -> u8[>..] {
+    var out: u8[>..] = [];
+    if !file_exists(path) {
+        format(out, " ", styled("1;33", "(missing)", 1));
+    }
+    return out;
+}
+
+// Shows everything Rivet recorded about one installed application.
+fn info(name: u8[:]) -> i32 {
+    var id: u8[>..] = [];
+    make_id(name, id);
+    let apps = load_registry();
+    for e in apps {
+        if e.id[..] == id[..] {
+            var icon: u8[>..] = [];
+            if e.icon.len > 0 {
+                format(icon, e.icon, missing_note(e.icon));
+            } else {
+                format(icon, "none");
+            }
+            print(styled("1", label(e.name, e.version), 1));
+            print("  id         ", e.id[..]);
+            print("  file       ", e.path, missing_note(e.path));
+            print("  size       ", size_text(e.size_bytes));
+            print("  installed  ", date_text(e.installed_at));
+            print("  menu entry ", e.desktop, missing_note(e.desktop));
+            print("  icon       ", icon);
+            return 0;
+        }
+    }
+    fail(str("'", id, "' is not installed (see `rivet list`)"));
+    return 1;
+}
+
+// Says what install would do with src, without changing anything. Exit 0 when
+// the install would go ahead, 1 when it would be refused or the file is bad.
+fn dry_run(src: u8[:]) -> i32 {
+    var name:    u8[>..] = [];
+    var version: u8[>..] = [];
+    var id:      u8[>..] = [];
+    if !read_identity(src, name, version, id) {
+        return 1;
+    }
+    let apps = load_registry();
+    for e in apps {
+        if e.id[..] == id[..] {
+            var old_version: u8[>..] = [];
+            format(old_version, e.version);
+            let old = label(e.name, e.version);
+            let new = label(name, version);
+            let change = compare_versions(old_version, version);
+            if change == 0 {
+                fail(str(old, " is already installed; nothing would change"));
+                return 1;
+            }
+            if change < 0 {
+                print("would update ", old, " to ", new, ". Pass --yes to apply.");
+            } else {
+                print("would replace ", old, " with the older ", new, ". Pass --yes to apply.");
+            }
+            return 0;
+        }
+    }
+    print("would install ", label(name, version), " as '", id, "'");
+    return 0;
+}
+
+// The help for one command, or false when there is no such command.
+fn help_for(cmd: u8[:]) -> bool {
+    if cmd == "install" {
+        print(styled("1", "rivet install", 1), " [--yes] [--dry-run] <file.AppImage>");
+        print();
+        print("Install an AppImage into the application menu. If an application with");
+        print("the same name is already installed, the versions are compared: a newer");
+        print("or older version replaces it after confirmation, and the same version is");
+        print("refused.");
+        print();
+        print("  --yes       replace an installed version without asking");
+        print("  --dry-run   show what would happen, and change nothing");
+        print("  --wait      keep the window open until Enter is pressed (used by double-click)");
+        return true;
+    }
+    if cmd == "uninstall" {
+        print(styled("1", "rivet uninstall", 1), " <name>");
+        print();
+        print("Remove an installed application and its files. The name is case-insensitive.");
+        return true;
+    }
+    if cmd == "list" {
+        print(styled("1", "rivet list", 1));
+        print();
+        print("List installed applications with their version, size, and install time.");
+        return true;
+    }
+    if cmd == "info" {
+        print(styled("1", "rivet info", 1), " <name>");
+        print();
+        print("Show the files, size, install time, and menu entry of one application.");
+        return true;
+    }
+    if cmd == "register" {
+        print(styled("1", "rivet register", 1));
+        print();
+        print("Make Rivet open AppImage files, so a double-click installs them. Run it again");
+        print("if you move the rivet binary.");
+        return true;
+    }
+    return false;
+}
+
 fn usage() {
-    print("usage:");
-    print("  rivet install [--yes] <file.AppImage>   add an AppImage, or update an installed one");
-    print("  rivet uninstall <name>                  remove an installed AppImage");
-    print("  rivet list                              show installed AppImages");
-    print("  rivet register                          open AppImage files with Rivet on double-click");
-    print("  rivet --version                         print the version");
-    print("");
-    print("  --yes    replace an installed version without asking");
-    print("  --wait   keep the window open until Enter is pressed");
+    print(styled("1", "usage:", 1));
+    print("  rivet install [--yes] [--dry-run] <file.AppImage>");
+    print("  rivet uninstall <name>");
+    print("  rivet list");
+    print("  rivet info <name>");
+    print("  rivet register");
+    print("  rivet --version");
+    print();
+    print("Run `rivet <command> --help` for details.");
+}
+
+fn is_command(cmd: u8[:]) -> bool {
+    return cmd == "install" || cmd == "uninstall" || cmd == "list" || cmd == "info" || cmd == "register";
 }
 
 fn main() {
@@ -669,6 +871,8 @@ fn main() {
     // Flags may come after the command. Everything else is an operand.
     var yes = false;
     var wait = false;
+    var dry = false;
+    var help = false;
     var operands = 0;
     var operand = 0;
     for i in 2..a.len {
@@ -676,6 +880,10 @@ fn main() {
             yes = true;
         } else if a[i] == "--wait" {
             wait = true;
+        } else if a[i] == "--dry-run" {
+            dry = true;
+        } else if a[i] == "--help" || a[i] == "-h" {
+            help = true;
         } else {
             operands += 1;
             operand = i;
@@ -683,10 +891,18 @@ fn main() {
     }
 
     var status: i32 = 2;
-    if a.len >= 2 && a[1] == "install" && operands == 1 {
-        status = install(a[operand], yes);
-    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait {
+    if help && a.len >= 2 && help_for(a[1]) {
+        status = 0;
+    } else if a.len >= 2 && a[1] == "install" && operands == 1 {
+        if dry {
+            status = dry_run(a[operand]);
+        } else {
+            status = install(a[operand], yes);
+        }
+    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait && !dry {
         status = uninstall(a[operand]);
+    } else if a.len >= 2 && a[1] == "info" && operands == 1 && !yes && !wait && !dry {
+        status = info(a[operand]);
     } else if a.len == 2 && a[1] == "list" {
         status = list_apps();
     } else if a.len == 2 && a[1] == "register" {
@@ -697,8 +913,10 @@ fn main() {
     } else if a.len == 2 && (a[1] == "help" || a[1] == "-h" || a[1] == "--help") {
         usage();
         status = 0;
+    } else if a.len >= 2 && is_command(a[1]) {
+        fail(str("wrong arguments. See `rivet ", a[1], " --help`."));
     } else {
-        fail("unknown command, or the wrong arguments");
+        fail("unknown command. See `rivet --help`.");
         usage();
     }
 
