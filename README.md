@@ -1,8 +1,49 @@
+<div align="center">
+
 # Rivet
+
+![Rivet banner](docs/banner.png)
+
+**Install AppImages cleanly. Remove them just as cleanly.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-1f6feb.svg)
+![Goose](https://img.shields.io/badge/built%20with-Goose%20v2026.4-0b7285.svg)
+
+</div>
 
 Rivet is a small command-line installer for [AppImage](https://appimage.org) applications. It adds an AppImage to your application menu, extracts its icon, and records the install so it can be listed and removed cleanly.
 
-Rivet is written in [Goose](https://github.com/aardappel/goose) and builds to a single binary whose only runtime dependency is the C library. It makes no network connections, runs no background services, and never needs root.
+It is written in [Goose](https://github.com/aardappel/goose) and builds to a single binary whose only runtime dependency is the C library. It makes no network connections, runs no background services, and never needs root.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Install](#install)
+- [Usage](#usage)
+- [Updates](#updates)
+- [Graphical front end](#graphical-front-end)
+- [Double-click install](#double-click-install)
+- [Files](#files)
+- [Security](#security)
+- [Limitations](#limitations)
+- [License](#license)
+
+## Quick start
+
+```bash
+rivet install ~/Downloads/Krita-5.2.1-x86_64.AppImage
+rivet list
+rivet uninstall krita
+```
+
+```
+ Installed AppImages (1)
+
+ Name           Version     Size
+ ───────────────────────────────
+ Krita          5.2.1       182 MB
+```
 
 ## Install
 
@@ -33,12 +74,6 @@ sudo make install
 
 ## Usage
 
-```bash
-rivet install ~/Downloads/Krita-5.2.1-x86_64.AppImage
-rivet list
-rivet uninstall krita
-```
-
 | Command | Description |
 |---------|-------------|
 | `rivet install <file.AppImage>` | Install an AppImage. An installed application of the same name is updated only after confirmation. |
@@ -50,7 +85,7 @@ rivet uninstall krita
 
 Rivet reads the name and version from the file name. For example, `Krita-5.2.1-x86_64.AppImage` is Krita 5.2.1, and its ID is `krita`.
 
-### Updates
+## Updates
 
 Installing a file whose application is already installed compares the versions:
 
@@ -60,11 +95,11 @@ Installing a file whose application is already installed compares the versions:
 
 Versions compare part by part as numbers, so `10.0` is newer than `9.0`. Without a terminal, for example in a script, Rivet replaces nothing unless you pass `--yes`.
 
-### Graphical front end
+## Graphical front end
 
 `rivet-gui` is an optional Tkinter window. It lists installed applications and installs or removes them by running the `rivet` command. It needs Python 3 with Tkinter. Set `RIVET=/path/to/rivet` to choose a specific binary.
 
-### Double-click install
+## Double-click install
 
 Run `rivet register` once. It writes `~/.local/share/applications/rivet.desktop` and makes Rivet the default for `application/x-iso9660-appimage`, the MIME type that AppImage files use. Opening an AppImage in your file manager then installs it in a terminal window, which stays open until you press Enter. Run `rivet register` again if you move the `rivet` binary.
 
@@ -73,10 +108,10 @@ Run `rivet register` once. It writes `~/.local/share/applications/rivet.desktop`
 Rivet writes only inside `$XDG_DATA_HOME` (default `~/.local/share`):
 
 ```
-rivet/apps/                 installed AppImages
-rivet/registry.bin          the record of installed applications
+rivet/apps/                   installed AppImages
+rivet/registry.bin            the record of installed applications
 applications/rivet-*.desktop  menu entries
-icons/hicolor/              extracted icons
+icons/hicolor/                extracted icons
 ```
 
 The registry is a binary file written with Goose's `to_bytes()` and read with `from_bytes()`. A damaged registry is reported and ignored.
