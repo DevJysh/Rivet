@@ -408,6 +408,7 @@ fn install(src: u8[:]) -> i32 {
     desktop_text(text, name, dest, icon);
     if !write_file(desk, text) {
         delete_file(dest);
+        if icon.len > 0 { delete_file(icon); }
         fail("could not write the desktop entry");
         return 1;
     }
