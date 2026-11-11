@@ -229,11 +229,30 @@ fn quote_exec(out: u8[>..]&, path: u8[:]) {
     out.push('"');
 }
 
-fn desktop_text(out: u8[>..]&, name: u8[:], exec: u8[:], icon: u8[:]) {
+// The menu entry for an app. It has an Uninstall action, which the launcher
+// shows in the context menu. The action runs this rivet binary, so it is left
+// out when that binary's path is not known.
+fn desktop_text(out: u8[>..]&, name: u8[:], exec: u8[:], icon: u8[:], rivet: u8[:], id: u8[:]) {
     format(out, "[Desktop Entry]\nType=Application\nName=", name, "\nExec=");
     quote_exec(out, exec);
     format(out, " %U\nTerminal=false\nCategories=Utility;\n");
     if icon.len > 0 { format(out, "Icon=", icon, "\n"); }
+    if rivet.len > 0 {
+        format(out, "Actions=Uninstall;\n\n[Desktop Action Uninstall]\nName=Uninstall\nExec=");
+        quote_exec(out, rivet);
+        format(out, " uninstall ", id, "\n");
+    }
+}
+
+// This program's absolute path, or an empty string when it cannot be found.
+fn self_path() -> u8[>..] {
+    var buf: u8[4096] = [0; 4096];
+    let n = rv_self_exe(buf[..]);
+    var out: u8[>..] = [];
+    if n > 0 {
+        format(out, buf[..n]);
+    }
+    return out;
 }
 
 // Left-justified in a column of the given width, with a space after it.
@@ -563,7 +582,7 @@ fn install(src: u8[:], yes: bool) -> i32 {
     make_dirs(desk_dir);
     let desk = str(desk_dir, "/rivet-", id, ".desktop");
     var text: u8[>..] = [];
-    desktop_text(text, name, dest, icon);
+    desktop_text(text, name, dest, icon, self_path(), id);
     if !write_file(desk, text) {
         delete_file(dest);
         if !replacing && icon.len > 0 { delete_file(icon); }

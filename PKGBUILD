@@ -23,7 +23,7 @@ optdepends=(
   'xdg-utils: needed by rivet register'
 )
 source=(
-  "$pkgname::git+https://github.com/DevJysh/Rivet.git"
+  "$pkgname::git+https://github.com/DevJysh/Rivet.git#tag=v$pkgver"
   "goose::git+https://github.com/aardappel/goose.git#tag=v2026.4"
 )
 sha256sums=('SKIP' 'SKIP')

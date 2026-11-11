@@ -18,6 +18,7 @@ It is written in [Goose](https://github.com/aardappel/goose) and builds to a sin
 
 ## Contents
 
+- [Why Rivet](#why-rivet)
 - [Quick start](#quick-start)
 - [Install](#install)
 - [Usage](#usage)
@@ -28,6 +29,17 @@ It is written in [Goose](https://github.com/aardappel/goose) and builds to a sin
 - [Security](#security)
 - [Limitations](#limitations)
 - [License](#license)
+
+## Why Rivet
+
+Rivet does one job: it adds an AppImage to your menu, and it removes it cleanly when you ask. Its design takes ideas from [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher), which integrates AppImages into the launcher, lets you update and remove them from there, and opens them with a double-click. Rivet keeps the core of that: integrate, remove, and double-click to install.
+
+Rivet deliberately stays smaller:
+
+- **No daemon and no folder scanning.** Rivet runs when you ask it to, and it touches nothing else.
+- **One small binary.** About 118 KB, linked only against the C library.
+- **Only what you install.** Rivet records each install in its own registry and removes exactly those files.
+- **No update helper, no GUI framework.** Updates are a version comparison you confirm. The optional window is a thin front end over the same command.
 
 ## Quick start
 
@@ -100,6 +112,22 @@ Installing a file whose application is already installed compares the versions:
 
 Versions compare part by part as numbers, so `10.0` is newer than `9.0`. Without a terminal, for example in a script, Rivet replaces nothing unless you pass `--yes`.
 
+## Launcher actions
+
+Each menu entry has an **Uninstall** action, so you can remove an app from its right-click menu in most desktop environments. The action runs the `rivet` binary that installed the app. If you move Rivet, reinstall the apps to point the actions at the new location.
+
+## Performance
+
+Measured on a 512 MB stand-in AppImage, on Debian 12 with ext4:
+
+| Operation | Time |
+|-----------|------|
+| Start and print the version | about 3 ms |
+| `rivet list` or `rivet info` | a few ms |
+| `rivet install` (512 MB) | about 0.4 to 0.5 s, mostly writing to disk |
+
+Rivet copies with the kernel where it can: a reflink on Btrfs, XFS, and bcachefs, and `copy_file_range` elsewhere. On ext4 this cut CPU time for the copy by about 9%. The wall-clock time is limited by the disk.
+
 ## Graphical front end
 
 `rivet-gui` is an optional Tkinter window. It lists installed applications with a search box, and shows the details of the selected one. You can install an AppImage (Ctrl+O), uninstall the selected app (Delete), or refresh (F5). Work runs in the background, so the window stays responsive. Installing a newer or older version asks first, as the command line does.
@@ -136,7 +164,12 @@ The registry is a binary file written with Goose's `to_bytes()` and read with `f
 - **Versions** come from the file name. A name without a `Name-version` pattern has no version.
 - **Desktop entries** are minimal: `Categories=Utility;`. Edit the `.desktop` file to change them.
 - **Tested platforms:** Debian 12 only. The Arch `PKGBUILD` has not yet been verified with `makepkg`.
+- **Menu actions and the handler use the binary's path.** Reinstall apps, or run `rivet register`, after moving Rivet.
 - **Desktop integration** has not been checked in a real desktop. The `register` command was tested with a stub `xdg-mime`, and the graphical front end has not been opened on a display.
+
+## Releases
+
+Each release is a tarball with the stripped `rivet` binary, the `rivet-gui` script, the README, the license, and a `SHA256SUMS` file. Build the same tarball locally with `make dist`.
 
 ## License
 

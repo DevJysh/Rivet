@@ -243,6 +243,22 @@ case "$out" in *"$esc"*) bad "a dry run has no escape codes when piped" ;;
 "$rivet" uninstall widget >/dev/null 2>&1
 check "uninstall removes the test app" sh -c "! ls '$apps' | grep -qi 'widget'"
 
+# --- the Uninstall action in the menu ---------------------------------------
+
+# Gizmo is used only here. Its menu entry must offer an Uninstall action that
+# removes the app when the launcher runs it.
+cp "$tmp/fake" "$tmp/Gizmo-3.0-x86_64.AppImage"
+"$rivet" install "$tmp/Gizmo-3.0-x86_64.AppImage" >/dev/null 2>&1
+entry="$XDG_DATA_HOME/applications/rivet-gizmo.desktop"
+check "the menu entry lists the Uninstall action" grep -q '^Actions=Uninstall;$' "$entry"
+check "the menu entry defines the Uninstall action" grep -q '^\[Desktop Action Uninstall\]$' "$entry"
+act=$(sed -n '/^\[Desktop Action Uninstall\]/,$p' "$entry" | sed -n 's/^Exec=//p')
+case "$act" in *" uninstall gizmo") pass "the action runs rivet uninstall for the app" ;;
+    *) bad "the action runs rivet uninstall for the app (got: $act)" ;; esac
+sh -c "$act" >/dev/null 2>&1 || true
+check "running the Uninstall action removes the app" sh -c "! ls '$apps' | grep -qi 'gizmo'"
+check "and its menu entry" test ! -e "$entry"
+
 # --- a damaged registry is ignored, not fatal --------------------------------
 
 printf 'garbage' > "$data/registry.bin"
