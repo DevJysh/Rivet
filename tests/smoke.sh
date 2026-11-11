@@ -76,7 +76,7 @@ case "$out" in *"Installed AppImages (1)"*"Krita"*"5.2.1"*) pass "list shows the
 if out=$("$rivet" install "$tmp/Krita-5.2.1-x86_64.AppImage" 2>&1); then
     bad "a second install of the same app is refused"
 else
-    case "$out" in *"is installed; this file is"*) pass "a second install of the same app is refused" ;;
+    case "$out" in *"Krita 5.2.1 is already installed"*) pass "a second install of the same app is refused" ;;
         *) bad "a second install of the same app is refused (got: $out)" ;; esac
 fi
 
@@ -129,6 +129,60 @@ if out=$("$rivet" uninstall krita 2>&1); then
 else
     pass "uninstalling an app twice fails"
 fi
+
+# --- updates and replacement -------------------------------------------------
+
+# Ferret and Gadget use names of their own, so the checks above are not affected.
+cp "$tmp/fake" "$tmp/Ferret-1.0-x86_64.AppImage"
+cp "$tmp/fake" "$tmp/Ferret-1.1-x86_64.AppImage"
+cp "$tmp/fake" "$tmp/Gadget-9.0-x86_64.AppImage"
+cp "$tmp/fake" "$tmp/Gadget-10.0-x86_64.AppImage"
+ferret10="$tmp/Ferret-1.0-x86_64.AppImage"
+ferret11="$tmp/Ferret-1.1-x86_64.AppImage"
+"$rivet" install "$ferret10" >/dev/null 2>&1 </dev/null
+
+# Without a terminal and without --yes, a different version is not replaced.
+out=$("$rivet" install "$ferret11" 2>&1 </dev/null || true)
+case "$out" in *"Pass --yes"*) pass "an update needs a yes when there is no terminal" ;;
+    *) bad "an update needs a yes when there is no terminal (got: $out)" ;; esac
+out=$("$rivet" list 2>&1)
+case "$out" in *"Ferret"*"1.0"*) pass "a refused update leaves the old version" ;;
+    *) bad "a refused update leaves the old version (got: $out)" ;; esac
+
+# --yes replaces it, and the old files go.
+out=$("$rivet" install --yes "$ferret11" 2>&1)
+case "$out" in *"updated Ferret 1.0 to Ferret 1.1"*) pass "--yes updates to a newer version" ;;
+    *) bad "--yes updates to a newer version (got: $out)" ;; esac
+check "the old AppImage is removed after an update" sh -c "! ls '$apps' | grep -qi 'ferret-1\.0'"
+check "the new AppImage is installed after an update" test -x "$apps/ferret-1.1-x86_64.appimage"
+check "the menu entry is kept after an update" test -f "$XDG_DATA_HOME/applications/rivet-ferret.desktop"
+
+# A version that is the same as the installed one is refused, even with --yes.
+out=$("$rivet" install --yes "$ferret11" 2>&1 || true)
+case "$out" in *"Ferret 1.1 is already installed"*) pass "the same version is refused even with --yes" ;;
+    *) bad "the same version is refused even with --yes (got: $out)" ;; esac
+
+# An older version replaces a newer one only with --yes.
+out=$("$rivet" install --yes "$ferret10" 2>&1)
+case "$out" in *"replaced Ferret 1.1 with the older Ferret 1.0"*) pass "--yes can replace with an older version" ;;
+    *) bad "--yes can replace with an older version (got: $out)" ;; esac
+
+# Versions compare as numbers: 10.0 is newer than 9.0.
+"$rivet" install "$tmp/Gadget-9.0-x86_64.AppImage" >/dev/null 2>&1
+out=$("$rivet" install --yes "$tmp/Gadget-10.0-x86_64.AppImage" 2>&1)
+case "$out" in *"updated Gadget 9.0 to Gadget 10.0"*) pass "versions compare as numbers" ;;
+    *) bad "versions compare as numbers (got: $out)" ;; esac
+
+# --- register ----------------------------------------------------------------
+
+# register writes a handler entry for AppImage files. It runs whether or not
+# xdg-mime is installed, so the test does not depend on the desktop.
+out=$("$rivet" register 2>&1 </dev/null) && rc=0 || rc=$?
+check "register exits cleanly" test "$rc" -eq 0
+handler="$XDG_DATA_HOME/applications/rivet.desktop"
+check "register writes rivet.desktop" test -f "$handler"
+check "the handler lists the AppImage MIME type" grep -qF "MimeType=application/x-iso9660-appimage;" "$handler"
+check "the handler runs this rivet with the file" grep -qF "Exec=\"$rivet\" install --wait %f" "$handler"
 
 # --- a damaged registry is ignored, not fatal --------------------------------
 

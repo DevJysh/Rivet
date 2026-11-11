@@ -24,7 +24,9 @@ extern fn rv_file_magic(path: const u8[:]) -> i64;              // first four by
 extern fn rv_appimage_type(path: const u8[:]) -> i32;         // 1 or 2 for an AppImage, else 0
 extern fn rv_copy_file(src: const u8[:], dst: const u8[:]) -> i32;  // 0 ok, -1 failed, -2 same file
 extern fn rv_chmod(path: const u8[:], mode: i32) -> i32;
-extern fn rv_run(dir: const u8[:], prog: const u8[:], a1: const u8[:], a2: const u8[:]) -> i32;
+extern fn rv_run(dir: const u8[:], prog: const u8[:], a1: const u8[:], a2: const u8[:], a3: const u8[:]) -> i32;
+extern fn rv_is_tty() -> i32;                                   // 1 when stdin is a terminal
+extern fn rv_self_exe(out: u8[:]) -> i64;                       // this program's absolute path; -1 if unknown
 extern fn rv_remove_tree(path: const u8[:]) -> i32;
 
 // --- constants ----------------------------------------------------------------
@@ -234,7 +236,7 @@ fn save_registry(apps: AppEntry[>..]&) -> bool {
 // Asks the desktop database to pick up the entries. Optional: a missing tool
 // is not an error.
 fn refresh_desktop_db() {
-    rv_run("", "update-desktop-database", desktop_path(), "");
+    rv_run("", "update-desktop-database", desktop_path(), "", "");
 }
 
 // --- icons --------------------------------------------------------------------
@@ -308,7 +310,7 @@ fn extract_icon(app: u8[:], id: u8[:]) -> u8[>..] {
 
     // The AppImage extracts its own filesystem into ./squashfs-root, so this
     // needs no FUSE and no squashfs library.
-    rv_run(work, app, "--appimage-extract", "usr/share/icons");
+    rv_run(work, app, "--appimage-extract", "usr/share/icons", "");
     var root = str(work, "/squashfs-root");
     var pick = find_icon(root);
 
@@ -316,7 +318,7 @@ fn extract_icon(app: u8[:], id: u8[:]) -> u8[>..] {
         // Some AppImages only carry a .DirIcon at the top: a PNG is good enough.
         let fallback = str(work, "/fallback");
         make_dirs(fallback);
-        rv_run(fallback, app, "--appimage-extract", ".DirIcon");
+        rv_run(fallback, app, "--appimage-extract", ".DirIcon", "");
         root = str(fallback, "/squashfs-root");
         let dir_icon = str(root, "/.DirIcon");
         if rv_kind(dir_icon) == 1 && rv_file_magic(dir_icon) == PNG_MAGIC {
@@ -345,9 +347,69 @@ fn extract_icon(app: u8[:], id: u8[:]) -> u8[>..] {
     return dest;
 }
 
+// --- versions and prompts -----------------------------------------------------
+
+fn sign(x: i64) -> i64 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+    return 0;
+}
+
+fn leading_digits(s: u8[:]) -> i64 {
+    var n = 0;
+    while n < s.len && ascii::is_digit(s[n]) { n += 1; }
+    return n;
+}
+
+// Compares one dot-separated part of two versions: "9" < "10", and a
+// pre-release such as "0rc1" sorts before the release "0".
+fn compare_part(x: u8[:], y: u8[:]) -> i64 {
+    let dx = leading_digits(x);
+    let dy = leading_digits(y);
+    if dx == 0 || dy == 0 { return sign(compare(x, y)); }
+    let vx, okx = parse_int(x[..dx]);
+    let vy, oky = parse_int(y[..dy]);
+    if !okx || !oky { return sign(compare(x, y)); }
+    if vx != vy { return sign(vx - vy); }
+    let rx = x[dx..];
+    let ry = y[dy..];
+    if rx.len == 0 && ry.len == 0 { return 0; }
+    if rx.len == 0 { return 1; }
+    if ry.len == 0 { return -1; }
+    return sign(compare(rx, ry));
+}
+
+// -1 when a is older than b, 0 when they are the same, 1 when a is newer.
+fn compare_versions(a: u8[:], b: u8[:]) -> i64 {
+    let pa = split(a, '.');
+    let pb = split(b, '.');
+    let n = if pa.len > pb.len { pa.len } else { pb.len };
+    for i in n {
+        let x = if i < pa.len { pa[i] } else { "0" };
+        let y = if i < pb.len { pb[i] } else { "0" };
+        let c = compare_part(x, y);
+        if c != 0 { return c; }
+    }
+    return 0;
+}
+
+// Asks a yes/no question on the terminal. Only y or yes counts as yes.
+fn confirm(question: u8[:]) -> bool {
+    write_stdout(question);
+    flush_stdout();
+    var answer: u8[>..] = [];
+    if !read_line(answer) { return false; }
+    let t = trim(answer);
+    return t.len > 0 && (t[0] == 'y' || t[0] == 'Y');
+}
+
 // --- commands -----------------------------------------------------------------
 
-fn install(src: u8[:]) -> i32 {
+// Installs an AppImage. If an app with the same id is already installed, the
+// versions decide: the same version is refused, and a different one is
+// replaced after a yes from the user. Without a terminal, or without --yes,
+// nothing is replaced.
+fn install(src: u8[:], yes: bool) -> i32 {
     if !file_exists(src) {
         fail(str("no such file: ", src));
         return 1;
@@ -374,11 +436,39 @@ fn install(src: u8[:]) -> i32 {
     }
 
     var apps = load_registry();
+    var replacing = false;
+    var old_version: u8[>..] = [];
+    var old_label:   u8[>..] = [];
     for e in apps {
         if e.id[..] == id[..] {
-            fail(str(label(e.name, e.version), " is installed; this file is ",
-                     label(name, version), ". Run `rivet uninstall ", id, "` first to replace it."));
+            replacing = true;
+            format(old_version, e.version);
+            old_label = label(e.name, e.version);
+        }
+    }
+
+    var change: i64 = 0;
+    if replacing {
+        change = compare_versions(old_version, version);
+        if change == 0 {
+            fail(str(old_label, " is already installed"));
             return 1;
+        }
+        var question: u8[>..] = [];
+        if change < 0 {
+            format(question, "Update ", name, " from ", old_version, " to ", version, "? [y/N] ");
+        } else {
+            format(question, "Replace ", name, " ", old_version, " with the older ", version, "? [y/N] ");
+        }
+        if !yes {
+            if rv_is_tty() == 0 {
+                fail(str(old_label, " is installed. Pass --yes to replace it with ", label(name, version), "."));
+                return 1;
+            }
+            if !confirm(question) {
+                print("nothing changed");
+                return 1;
+            }
         }
     }
 
@@ -399,8 +489,12 @@ fn install(src: u8[:]) -> i32 {
     }
     rv_chmod(dest, EXEC_MODE);
 
-    // Everything else is optional: a missing icon just means the default one.
+    // The icon is optional: a missing one just means the default icon.
     let icon = extract_icon(dest, id);
+
+    // Write the menu entry, then record the install. If either step fails,
+    // the new copy and its icon are removed. The old version of an app that is
+    // being replaced is never touched on failure.
     let desk_dir = desktop_path();
     make_dirs(desk_dir);
     let desk = str(desk_dir, "/rivet-", id, ".desktop");
@@ -408,12 +502,16 @@ fn install(src: u8[:]) -> i32 {
     desktop_text(text, name, dest, icon);
     if !write_file(desk, text) {
         delete_file(dest);
-        if icon.len > 0 { delete_file(icon); }
+        if !replacing && icon.len > 0 { delete_file(icon); }
         fail("could not write the desktop entry");
         return 1;
     }
 
-    apps.push(AppEntry {
+    var updated: AppEntry[>..] = [];
+    for e in apps {
+        if e.id[..] != id[..] { updated.push(copy(e)); }
+    }
+    updated.push(AppEntry {
         id:           id,
         name:         copy(name),
         version:      copy(version),
@@ -423,16 +521,30 @@ fn install(src: u8[:]) -> i32 {
         size_bytes:   rv_file_size(dest),
         installed_at: time_ns() / 1000000000,
     });
-    if !save_registry(apps) {
+    if !save_registry(updated) {
         delete_file(desk);
         delete_file(dest);
-        if icon.len > 0 { delete_file(icon); }
+        if !replacing && icon.len > 0 { delete_file(icon); }
         fail("could not write the registry; nothing was installed");
         return 1;
     }
 
+    // The old version's files are removed only once the new ones are in place.
+    for e in apps {
+        if e.id[..] == id[..] {
+            if e.path[..] != dest[..] { delete_file(e.path); }
+            if e.icon.len > 0 && e.icon[..] != icon[..] { delete_file(e.icon); }
+        }
+    }
+
     refresh_desktop_db();
-    print("installed ", label(name, version));
+    if !replacing {
+        print("installed ", label(name, version));
+    } else if change < 0 {
+        print("updated ", old_label, " to ", label(name, version));
+    } else {
+        print("replaced ", old_label, " with the older ", label(name, version));
+    }
     return 0;
 }
 
@@ -476,6 +588,47 @@ fn uninstall(name: u8[:]) -> i32 {
     return 0;
 }
 
+// Makes Rivet the program that opens AppImage files, so a double-click installs
+// them. The entry is rivet.desktop; its name cannot collide with rivet-<id>.desktop.
+fn register_handler() -> i32 {
+    var exe_buf: u8[4096] = [0; 4096];
+    let n = rv_self_exe(exe_buf[..]);
+    if n < 0 {
+        fail("cannot find the path of this program");
+        return 1;
+    }
+    var exe: u8[>..] = [];
+    format(exe, exe_buf[..n]);
+
+    var text: u8[>..] = [];
+    format(text, "[Desktop Entry]\nType=Application\nName=Rivet\nComment=Install this AppImage with Rivet\nExec=");
+    quote_exec(text, exe);
+    format(text, " install --wait %f\nTerminal=true\nNoDisplay=true\nCategories=Utility;\nMimeType=application/x-iso9660-appimage;\n");
+
+    let dir = desktop_path();
+    make_dirs(dir);
+    let file = str(dir, "/rivet.desktop");
+    if !write_file(file, text) {
+        fail(str("could not write ", file));
+        return 1;
+    }
+    refresh_desktop_db();
+
+    let rc = rv_run("", "xdg-mime", "default", "rivet.desktop", "application/x-iso9660-appimage");
+    if rc == 0 {
+        print("Rivet now opens AppImage files. Double-click one to install it.");
+        return 0;
+    }
+    if rc == 127 {
+        print("wrote ", file);
+        print("xdg-mime was not found. Choose Rivet as the default application for");
+        print("AppImage files in your file manager's settings.");
+        return 0;
+    }
+    fail("xdg-mime could not set Rivet as the default; choose it in your file manager's settings");
+    return 1;
+}
+
 fn list_apps() -> i32 {
     let apps = load_registry();
     if apps.len == 0 {
@@ -496,10 +649,14 @@ fn list_apps() -> i32 {
 
 fn usage() {
     print("usage:");
-    print("  rivet install <file.AppImage>   add an AppImage to your application menu");
-    print("  rivet uninstall <name>          remove an installed AppImage");
-    print("  rivet list                      show installed AppImages");
-    print("  rivet --version                 print the version");
+    print("  rivet install [--yes] <file.AppImage>   add an AppImage, or update an installed one");
+    print("  rivet uninstall <name>                  remove an installed AppImage");
+    print("  rivet list                              show installed AppImages");
+    print("  rivet register                          open AppImage files with Rivet on double-click");
+    print("  rivet --version                         print the version");
+    print("");
+    print("  --yes    replace an installed version without asking");
+    print("  --wait   keep the window open until Enter is pressed");
 }
 
 fn main() {
@@ -509,13 +666,31 @@ fn main() {
         exit(1);
     }
 
+    // Flags may come after the command. Everything else is an operand.
+    var yes = false;
+    var wait = false;
+    var operands = 0;
+    var operand = 0;
+    for i in 2..a.len {
+        if a[i] == "--yes" || a[i] == "-y" {
+            yes = true;
+        } else if a[i] == "--wait" {
+            wait = true;
+        } else {
+            operands += 1;
+            operand = i;
+        }
+    }
+
     var status: i32 = 2;
-    if a.len == 3 && a[1] == "install" {
-        status = install(a[2]);
-    } else if a.len == 3 && a[1] == "uninstall" {
-        status = uninstall(a[2]);
+    if a.len >= 2 && a[1] == "install" && operands == 1 {
+        status = install(a[operand], yes);
+    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait {
+        status = uninstall(a[operand]);
     } else if a.len == 2 && a[1] == "list" {
         status = list_apps();
+    } else if a.len == 2 && a[1] == "register" {
+        status = register_handler();
     } else if a.len == 2 && (a[1] == "--version" || a[1] == "version") {
         print("rivet 0.1.0");
         status = 0;
@@ -525,6 +700,12 @@ fn main() {
     } else {
         fail("unknown command, or the wrong arguments");
         usage();
+    }
+
+    if wait {
+        print("Press Enter to close this window.");
+        var line: u8[>..] = [];
+        read_line(line);
     }
     exit(status);
 }

@@ -23,7 +23,8 @@ Rivet is written in [Goose](https://github.com/aardappel/goose). It builds to a 
 - **Desktop integration.** Rivet writes a freedesktop `.desktop` entry and refreshes the desktop database when `update-desktop-database` is installed.
 - **Registry.** Installed applications are recorded in a binary registry. A damaged registry is detected, reported, and ignored rather than crashing the tool.
 - **Clean uninstall.** Rivet removes exactly what it recorded: the AppImage, the desktop entry, the icon, and the registry entry. Nothing else is touched.
-- **Duplicate protection.** Installing an application that is already installed is refused, and the message shows the installed version and the one you tried to install.
+- **Updates.** Installing a different version of an installed application asks before it replaces the old one, and the message shows both versions. The same version is always refused.
+- **Double-click install.** `rivet register` makes Rivet the handler for AppImage files, so opening one in a file manager installs it.
 - **XDG compliant.** Rivet honors `$XDG_DATA_HOME` and falls back to `~/.local/share`.
 - **Small and dependency-free.** No daemon, no configuration files, no GUI framework, no network access. The C library is the only runtime dependency.
 
@@ -31,11 +32,12 @@ Rivet is written in [Goose](https://github.com/aardappel/goose). It builds to a 
 
 | Requirement | Notes |
 |-------------|-------|
-| Linux, x86_64, glibc | Developed and tested on Debian 12. Packaging for Arch Linux is included. |
+| Linux, x86_64, glibc | Tested on Debian 12 only. The `PKGBUILD` for Arch Linux is included but has not yet been verified with `makepkg`. |
 | [Goose compiler](https://github.com/aardappel/goose) | Version v2026.4 is used. Build it from source with CMake. |
 | C compiler | `gcc` or `clang`. Goose uses it to produce the final binary. |
 | CMake 3.27 or later | Only needed to build the Goose compiler. |
 | `update-desktop-database` | Optional. Provided by `desktop-file-utils`. |
+| `xdg-mime` | Optional. Used by `rivet register`. Provided by `xdg-utils`. |
 | `fuse2` | Optional. Needed to run AppImages normally. Rivet itself does not need it. |
 
 ## Installation
@@ -88,7 +90,9 @@ rivet uninstall krita
 
 | Command | Description |
 |---------|-------------|
-| `rivet install <file.AppImage>` | Install an AppImage into the application menu |
+| `rivet install <file.AppImage>` | Install an AppImage into the application menu. If the same application is installed at another version, Rivet asks before replacing it. |
+| `rivet install --yes <file.AppImage>` | As above, but replaces the installed version without asking |
+| `rivet register` | Make Rivet open AppImage files, so a double-click installs them |
 | `rivet uninstall <name>` | Remove an installed AppImage. The name is case-insensitive, for example `krita` or `Krita`. |
 | `rivet list` | Show installed AppImages, with version and size |
 | `rivet --version` | Print the version |
@@ -117,16 +121,34 @@ Rivet takes the application name and version from the file name:
 
 The version starts at the first `-` followed by a digit, and architecture suffixes such as `-x86_64` or `-aarch64` are removed. The ID is the lowercase name and is what `uninstall` matches against. If a file name has no version, the version column is left blank.
 
+### Updating an installed application
+
+Rivet matches applications by name. When you install a file whose name matches an installed application:
+
+- **A newer version** (for example `1.1` after `1.0`): Rivet asks `Update Ferret from 1.0 to 1.1? [y/N]`. Answer `y` to replace the old version.
+- **An older version:** Rivet asks before replacing the newer one, so a downgrade is never accidental.
+- **The same version:** Rivet refuses, because nothing would change.
+
+Versions are compared part by part as numbers, so `10.0` is newer than `9.0`. A pre-release such as `1.0rc1` is older than `1.0`.
+
+When standard input is not a terminal, for example in a script, Rivet does not replace anything. It prints the reason and exits. Pass `--yes` to replace the version without a prompt.
+
+### Double-click install
+
+Run `rivet register` once. It writes `~/.local/share/applications/rivet.desktop` and asks `xdg-mime` to make it the default for `application/x-iso9660-appimage`, the MIME type that AppImage files use. After that, opening an AppImage in your file manager runs `rivet install` in a terminal window, which stays open until you press Enter.
+
+The handler records the absolute path of the `rivet` binary. If you move Rivet, run `rivet register` again. If `xdg-mime` is not installed, `register` writes the handler and tells you how to choose Rivet in your file manager.
+
 ## How installation works
 
 `rivet install` performs these steps in order:
 
 1. **Validate.** The file must have an ELF header and the AppImage signature. Rivet runs the file to extract its icon, so an ordinary program is rejected before it is ever run.
-2. **Check for duplicates.** If an application with the same ID is already in the registry, Rivet reports both versions and stops.
+2. **Check for an installed copy.** If an application with the same ID is already in the registry, Rivet compares the versions. It replaces the old one only after a yes, or with `--yes`. The same version is refused.
 3. **Copy.** The file is copied into `~/.local/share/rivet/apps/` with a lowercase name, streamed in pieces, and made executable.
 4. **Extract the icon.** Rivet runs the AppImage with `--appimage-extract usr/share/icons` in a temporary folder. The AppImage unpacks its own icon directory there, so neither FUSE nor a squashfs library is needed. The best icon is copied into the icon theme.
 5. **Write the desktop entry.** The entry contains the name, a quoted `Exec` path with `%U`, the icon path if one was found, and `Categories=Utility;`.
-6. **Register.** The new record is appended to the registry, which is written atomically. If a step fails, the files this install created are removed.
+6. **Register.** The new record is written to the registry, which is replaced atomically. If a step fails, the files this install created are removed. The files of an older version are deleted only after the new install has succeeded.
 7. **Confirm.** Rivet prints `installed Krita 5.2.1`.
 
 Uninstallation rewrites the registry first, so a failed write removes nothing. It then deletes the recorded files.
@@ -143,6 +165,7 @@ Paths below assume the default `XDG_DATA_HOME`.
 └── registry.bin
 
 ~/.local/share/applications/
+├── rivet.desktop              (present after `rivet register`)
 ├── rivet-krita.desktop
 └── rivet-neovim.desktop
 
@@ -163,7 +186,10 @@ The registry stores its records with Goose's `to_bytes()` and reads them back wi
 ## Limitations
 
 - **Icon extraction depends on `--appimage-extract`.** This works for AppImages built with the type 2 runtime, which is the common format. Other AppImages install without an icon.
-- **No update detection.** To replace an installed application with a newer version, run `rivet uninstall` first, then install the new file.
+- **Updates are matched by name.** Rivet compares a file's name with the applications it installed. It does not check online for new releases.
+- **Double-click opens a terminal.** A double-click install runs in a terminal emulator so that Rivet can ask before it replaces anything. Without a terminal emulator, use `rivet install` from the command line.
+- **Desktop handler is tied to a path.** `rivet register` records the binary's location. Run it again after moving Rivet.
+- **Double-click is not yet tested in a desktop.** The `register` command has been checked with a stub `xdg-mime`, not in a file manager.
 - **Versions come from file names.** A file name that does not follow the `Name-version` pattern produces an entry with no version.
 - **Desktop entries are minimal.** Each entry is `Categories=Utility;`. Edit the `.desktop` file in `~/.local/share/applications/` to change it.
 - **A damaged registry is ignored.** Rivet warns about it and starts with an empty registry, so the applications that were recorded in it are no longer tracked. Their files remain on disk.
@@ -173,8 +199,6 @@ The registry stores its records with Goose's `to_bytes()` and reads them back wi
 
 These features are planned but not yet implemented:
 
-- Install by double-clicking an AppImage, through a MIME type association
-- Detect a newer version of an installed application and offer to update it
 - Native dialog boxes, using GTK or Tkinter
 - Packages for more distributions
 

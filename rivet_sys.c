@@ -152,22 +152,23 @@ int32_t rv_chmod(rv_str path, int32_t mode) {
     return rc;
 }
 
-/* Runs prog (looked up on PATH) with up to two arguments, in dir when dir is
-   not empty, with stdin, stdout and stderr on /dev/null. An empty argument is
-   left out. Returns the exit status, 127 when prog cannot start, or -1 when
-   no process could be made. */
-int32_t rv_run(rv_str dir, rv_str prog, rv_str a1, rv_str a2) {
+/* Runs prog (looked up on PATH) with up to three arguments, in dir when dir
+   is not empty, with stdin, stdout and stderr on /dev/null. An empty argument
+   is left out. Returns the exit status, 127 when prog cannot start, or -1
+   when no process could be made. */
+int32_t rv_run(rv_str dir, rv_str prog, rv_str a1, rv_str a2, rv_str a3) {
     char *p = rv_cpath(prog), *d = rv_cpath(dir);
-    char *x1 = rv_cpath(a1), *x2 = rv_cpath(a2);
-    char *argv[4];
+    char *x1 = rv_cpath(a1), *x2 = rv_cpath(a2), *x3 = rv_cpath(a3);
+    char *argv[5];
     int argc = 0, status = 0;
     pid_t pid;
     int32_t rc = -1;
 
-    if (!p || !d || !x1 || !x2) goto done;
+    if (!p || !d || !x1 || !x2 || !x3) goto done;
     argv[argc++] = p;
     if (a1.len > 0) argv[argc++] = x1;
     if (a2.len > 0) argv[argc++] = x2;
+    if (a3.len > 0) argv[argc++] = x3;
     argv[argc] = NULL;
 
     pid = fork();
@@ -190,8 +191,24 @@ int32_t rv_run(rv_str dir, rv_str prog, rv_str a1, rv_str a2) {
     else rc = -1;
 
 done:
-    free(p); free(d); free(x1); free(x2);
+    free(p); free(d); free(x1); free(x2); free(x3);
     return rc;
+}
+
+/* 1 when standard input is a terminal, so the user can be asked a question. */
+int32_t rv_is_tty(void) {
+    return isatty(0) ? 1 : 0;
+}
+
+/* Writes the absolute path of the running program into out, without a NUL,
+   and returns its length. Returns -1 when the path does not fit or cannot be
+   read. */
+typedef struct { uint8_t *data; int64_t len; } rv_buf;
+
+int64_t rv_self_exe(rv_buf out) {
+    ssize_t n = readlink("/proc/self/exe", (char *)out.data, (size_t)out.len);
+    if (n <= 0 || n >= (ssize_t)out.len) return -1;
+    return (int64_t)n;
 }
 
 /* Removes path and everything under it. Symbolic links are removed as links
