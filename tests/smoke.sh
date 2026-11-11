@@ -184,6 +184,65 @@ check "register writes rivet.desktop" test -f "$handler"
 check "the handler lists the AppImage MIME type" grep -qF "MimeType=application/x-iso9660-appimage;" "$handler"
 check "the handler runs this rivet with the file" grep -qF "Exec=\"$rivet\" install --wait %f" "$handler"
 
+# --- info, dry runs, help, and plain output --------------------------------
+
+# Widget is used only here, so the checks above are not affected.
+cp "$tmp/fake" "$tmp/Widget-1.0-x86_64.AppImage"
+cp "$tmp/fake" "$tmp/Widget-2.0-x86_64.AppImage"
+esc=$(printf '\033')
+
+# A dry run of a new app reports it and installs nothing.
+out=$("$rivet" install --dry-run "$tmp/Widget-1.0-x86_64.AppImage" 2>&1)
+case "$out" in *"would install Widget 1.0"*) pass "a dry run reports a new install" ;;
+    *) bad "a dry run reports a new install (got: $out)" ;; esac
+check "a dry run copies nothing" sh -c "! ls '$apps' 2>/dev/null | grep -qi 'widget'"
+
+"$rivet" install "$tmp/Widget-1.0-x86_64.AppImage" >/dev/null 2>&1
+
+# A dry run of a newer version reports the update, and changes nothing.
+out=$("$rivet" install --dry-run "$tmp/Widget-2.0-x86_64.AppImage" 2>&1)
+case "$out" in *"would update Widget 1.0 to Widget 2.0"*) pass "a dry run reports an update" ;;
+    *) bad "a dry run reports an update (got: $out)" ;; esac
+check "a dry run leaves the installed version alone" sh -c "ls '$apps' | grep -qi 'widget-1\.0'"
+
+# A dry run of the same version is refused with a failing status.
+if out=$("$rivet" install --dry-run "$tmp/Widget-1.0-x86_64.AppImage" 2>&1); then
+    bad "a dry run of the same version is refused"
+else
+    case "$out" in *"Widget 1.0 is already installed"*) pass "a dry run of the same version is refused" ;;
+        *) bad "a dry run of the same version is refused (got: $out)" ;; esac
+fi
+
+# info shows what was recorded.
+out=$("$rivet" info widget 2>&1)
+case "$out" in *"Widget 1.0"*"id         widget"*"installed  "*"menu entry"*) pass "info shows the recorded details" ;;
+    *) bad "info shows the recorded details (got: $out)" ;; esac
+if "$rivet" info nothere >/dev/null 2>&1; then bad "info of an unknown app fails"; else pass "info of an unknown app fails"; fi
+
+# list has an install-time column.
+out=$("$rivet" list 2>&1)
+case "$out" in *"Installed"*"UTC"*) pass "list shows when each app was installed" ;;
+    *) bad "list shows when each app was installed (got: $out)" ;; esac
+
+# Help is available for each command.
+out=$("$rivet" install --help 2>&1)
+case "$out" in *"--dry-run"*) pass "install --help lists its flags" ;;
+    *) bad "install --help lists its flags (got: $out)" ;; esac
+out=$("$rivet" info --help 2>&1)
+case "$out" in *"rivet info <name>"*) pass "info --help shows its usage" ;;
+    *) bad "info --help shows its usage (got: $out)" ;; esac
+
+# Scripts and pipes get plain text, with no escape codes.
+out=$("$rivet" list 2>&1)
+case "$out" in *"$esc"*) bad "list has no escape codes when piped" ;;
+    *) pass "list has no escape codes when piped" ;; esac
+out=$("$rivet" install --dry-run "$tmp/Widget-2.0-x86_64.AppImage" 2>&1)
+case "$out" in *"$esc"*) bad "a dry run has no escape codes when piped" ;;
+    *) pass "a dry run has no escape codes when piped" ;; esac
+
+"$rivet" uninstall widget >/dev/null 2>&1
+check "uninstall removes the test app" sh -c "! ls '$apps' | grep -qi 'widget'"
+
 # --- a damaged registry is ignored, not fatal --------------------------------
 
 printf 'garbage' > "$data/registry.bin"

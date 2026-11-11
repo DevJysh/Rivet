@@ -200,6 +200,18 @@ int32_t rv_is_tty(void) {
     return isatty(0) ? 1 : 0;
 }
 
+/* 1 when file descriptor fd is a terminal, so progress lines may be shown. */
+int32_t rv_isatty(int32_t fd) {
+    return isatty(fd) ? 1 : 0;
+}
+
+/* 1 when colors may be used on fd: it is a terminal and NO_COLOR is not set
+   (https://no-color.org). */
+int32_t rv_color_ok(int32_t fd) {
+    if (getenv("NO_COLOR") != NULL) return 0;
+    return isatty(fd) ? 1 : 0;
+}
+
 /* Writes the absolute path of the running program into out, without a NUL,
    and returns its length. Returns -1 when the path does not fit or cannot be
    read. */

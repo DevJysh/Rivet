@@ -40,9 +40,9 @@ rivet uninstall krita
 ```
  Installed AppImages (1)
 
- Name           Version     Size
- ───────────────────────────────
- Krita          5.2.1       182 MB
+ Name           Version     Size       Installed
+ ────────────────────────────────────────────────────
+ Krita          5.2.1       182 MB     2026-11-11 05:08 UTC
 ```
 
 ## Install
@@ -77,11 +77,16 @@ sudo make install
 | Command | Description |
 |---------|-------------|
 | `rivet install <file.AppImage>` | Install an AppImage. An installed application of the same name is updated only after confirmation. |
+| `rivet install --dry-run <file.AppImage>` | Show what an install would do, and change nothing. |
 | `rivet install --yes <file.AppImage>` | Install and replace an installed version without asking. |
 | `rivet uninstall <name>` | Remove an installed application. The name is case-insensitive. |
-| `rivet list` | List installed applications with their version and size. |
+| `rivet list` | List installed applications with their version, size, and install time. |
+| `rivet info <name>` | Show the files, size, install time, and menu entry of one application. |
 | `rivet register` | Open AppImage files with Rivet on double-click. |
+| `rivet <command> --help` | Show the help for one command. |
 | `rivet --version` | Print the version. |
+
+Output is plain text when it is piped or redirected, so scripts can read it. In a terminal, Rivet uses color and shows progress while it works. Set `NO_COLOR` to turn color off.
 
 Rivet reads the name and version from the file name. For example, `Krita-5.2.1-x86_64.AppImage` is Krita 5.2.1, and its ID is `krita`.
 
@@ -97,7 +102,9 @@ Versions compare part by part as numbers, so `10.0` is newer than `9.0`. Without
 
 ## Graphical front end
 
-`rivet-gui` is an optional Tkinter window. It lists installed applications and installs or removes them by running the `rivet` command. It needs Python 3 with Tkinter. Set `RIVET=/path/to/rivet` to choose a specific binary.
+`rivet-gui` is an optional Tkinter window. It lists installed applications with a search box, and shows the details of the selected one. You can install an AppImage (Ctrl+O), uninstall the selected app (Delete), or refresh (F5). Work runs in the background, so the window stays responsive. Installing a newer or older version asks first, as the command line does.
+
+It needs Python 3 with Tkinter, and it runs the `rivet` command for every change. Set `RIVET=/path/to/rivet` to choose a specific binary.
 
 ## Double-click install
 
