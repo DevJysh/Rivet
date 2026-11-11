@@ -26,7 +26,8 @@ Rivet is written in [Goose](https://github.com/aardappel/goose). It builds to a 
 - **Updates.** Installing a different version of an installed application asks before it replaces the old one, and the message shows both versions. The same version is always refused.
 - **Double-click install.** `rivet register` makes Rivet the handler for AppImage files, so opening one in a file manager installs it.
 - **XDG compliant.** Rivet honors `$XDG_DATA_HOME` and falls back to `~/.local/share`.
-- **Small and dependency-free.** No daemon, no configuration files, no GUI framework, no network access. The C library is the only runtime dependency.
+- **Graphical front end.** `rivet-gui` is an optional Tkinter window that lists installed apps and installs or removes them. It runs the `rivet` command and does not change anything itself.
+- **Small and dependency-free.** No daemon, no configuration files, no network access. The C library is the only runtime dependency of `rivet`.
 
 ## Requirements
 
@@ -38,6 +39,8 @@ Rivet is written in [Goose](https://github.com/aardappel/goose). It builds to a 
 | CMake 3.27 or later | Only needed to build the Goose compiler. |
 | `update-desktop-database` | Optional. Provided by `desktop-file-utils`. |
 | `xdg-mime` | Optional. Used by `rivet register`. Provided by `xdg-utils`. |
+| Python 3 with Tkinter | Optional. Needed only for `rivet-gui`. Tkinter is packaged as `python-tk` on Arch and `python3-tk` on Debian. |
+| `python3` | Needed to run the GUI tests (`tests/gui_test.py`). |
 | `fuse2` | Optional. Needed to run AppImages normally. Rivet itself does not need it. |
 
 ## Installation
@@ -78,7 +81,7 @@ If `goose` cannot find its standard library, set `GOOSE_STDLIB=/path/to/goose/st
 make GOOSE=../goose/build/goose test
 ```
 
-The test suite builds a stand-in AppImage and checks installation, listing, uninstallation, and the edge cases, all inside a temporary home directory.
+The test suite builds a stand-in AppImage and checks installation, listing, uninstallation, and the edge cases, all inside a temporary home directory. It then runs the GUI's logic tests (`tests/gui_test.py`). Those tests do not open a window.
 
 ## Usage
 
@@ -132,6 +135,14 @@ Rivet matches applications by name. When you install a file whose name matches a
 Versions are compared part by part as numbers, so `10.0` is newer than `9.0`. A pre-release such as `1.0rc1` is older than `1.0`.
 
 When standard input is not a terminal, for example in a script, Rivet does not replace anything. It prints the reason and exits. Pass `--yes` to replace the version without a prompt.
+
+### Graphical front end
+
+```bash
+rivet-gui
+```
+
+The window lists installed AppImages. **Install AppImage...** opens a file chooser. When an installed version would be replaced, the window asks first, as the command line does. **Uninstall** removes the selected app after a confirmation. The window runs the `rivet` command for each action. Set `RIVET=/path/to/rivet` to use a specific binary.
 
 ### Double-click install
 
@@ -193,13 +204,12 @@ The registry stores its records with Goose's `to_bytes()` and reads them back wi
 - **Versions come from file names.** A file name that does not follow the `Name-version` pattern produces an entry with no version.
 - **Desktop entries are minimal.** Each entry is `Categories=Utility;`. Edit the `.desktop` file in `~/.local/share/applications/` to change it.
 - **A damaged registry is ignored.** Rivet warns about it and starts with an empty registry, so the applications that were recorded in it are no longer tracked. Their files remain on disk.
-- **Command line only.** There is no graphical interface.
+- **The graphical front end is not yet checked on a display.** `rivet-gui` has been tested only through its logic, which runs the real `rivet` binary. Its window has not been opened.
 
 ## Roadmap
 
 These features are planned but not yet implemented:
 
-- Native dialog boxes, using GTK or Tkinter
 - Packages for more distributions
 
 ## Development
@@ -211,7 +221,10 @@ These features are planned but not yet implemented:
 ├── rivet.build        sidecar that tells `goose build` to compile rivet_sys.c
 ├── tests/
 │   ├── smoke.sh       end-to-end checks
+│   ├── gui_test.py    logic tests for rivet-gui (no window is opened)
 │   └── fake_appimage.c  stand-in AppImage used by the checks
+├── gui/
+│   └── rivet-gui      optional Tkinter front end
 ├── Makefile           build, test, install
 └── PKGBUILD           Arch Linux package
 ```

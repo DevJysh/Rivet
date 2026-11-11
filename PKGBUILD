@@ -15,10 +15,12 @@ arch=('x86_64')
 url='https://github.com/DevJysh/Rivet'
 license=('MIT')
 depends=('glibc')
-makedepends=('git' 'cmake' 'gcc')
+makedepends=('git' 'cmake' 'gcc' 'python')
 optdepends=(
   'fuse2: needed to run AppImages normally (Rivet itself does not need it)'
   'desktop-file-utils: refreshes the desktop database after install'
+  'tk: needed by rivet-gui'
+  'xdg-utils: needed by rivet register'
 )
 source=(
   "$pkgname::git+https://github.com/DevJysh/Rivet.git"
