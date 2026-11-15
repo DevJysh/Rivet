@@ -73,7 +73,7 @@ makepkg -si
 
 ```bash
 git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose
-cmake -S goose -B goose/build -DCMAKE_BUILD_TYPE=Release
+cmake -S goose -B goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
 cmake --build goose/build
 
 git clone https://github.com/DevJysh/Rivet
@@ -84,7 +84,7 @@ sudo make install
 
 `make install` puts `rivet` and `rivet-gui` in `/usr/local/bin`. Use `PREFIX=/usr` for `/usr/bin`. To run the tests, use `make GOOSE=../goose/build/goose test`.
 
-The Goose build prints about 40 compiler warnings. They come from Goose's own source, not from Rivet, and they do not stop the build. Rivet's own build prints none.
+The Goose build passes `-w` to hide about 40 compiler warnings from Goose's own source. They are not from Rivet and do not affect the result. Leave out the two `-w` flags to see them. Rivet's own build prints none.
 
 ## Usage
 
