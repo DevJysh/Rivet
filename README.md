@@ -163,7 +163,7 @@ The registry is a binary file written with Goose's `to_bytes()` and read with `f
 - **Updates** are matched by application name. Rivet does not check for new releases.
 - **Versions** come from the file name. A name without a `Name-version` pattern has no version.
 - **Desktop entries** are minimal: `Categories=Utility;`. Edit the `.desktop` file to change them.
-- **Tested platforms:** Debian 12 only. The Arch `PKGBUILD` has not yet been verified with `makepkg`.
+- **Tested platforms:** Debian 12. The Arch `PKGBUILD` steps were replayed from the `v0.1.0` tag, but `makepkg` itself has not been run.
 - **Menu actions and the handler use the binary's path.** Reinstall apps, or run `rivet register`, after moving Rivet.
 - **Desktop integration** has not been checked in a real desktop. The `register` command was tested with a stub `xdg-mime`, and the graphical front end has not been opened on a display.
 
