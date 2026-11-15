@@ -84,6 +84,8 @@ sudo make install
 
 `make install` puts `rivet` and `rivet-gui` in `/usr/local/bin`. Use `PREFIX=/usr` for `/usr/bin`. To run the tests, use `make GOOSE=../goose/build/goose test`.
 
+The Goose build prints about 40 compiler warnings. They come from Goose's own source, not from Rivet, and they do not stop the build. Rivet's own build prints none.
+
 ## Usage
 
 | Command | Description |
