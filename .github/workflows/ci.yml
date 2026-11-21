@@ -54,10 +54,20 @@ jobs:
       # makepkg refuses to run as root, so the package is built as a normal
       # user. The PKGBUILD fetches the v0.1.0 tag, so this step checks that the
       # packaging works; the working tree is covered by the step above.
-      - name: Build the package with makepkg
-        run: |
-          chown -R builder:builder "$GITHUB_WORKSPACE"
-          su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -f --noconfirm"
+      - name: Give the builder user the workspace
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Read the PKGBUILD
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > /dev/null"
+
+      - name: Fetch the sources
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -o --noconfirm"
+
+      - name: Build and package, without the check step
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm --nocheck"
+
+      - name: Run the check step and package again
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm"
 
       - name: Install the package and check it
         run: |
