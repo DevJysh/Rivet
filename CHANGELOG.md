@@ -13,6 +13,7 @@ All notable changes to Rivet are listed here. The format follows
 - Shell completion for bash, zsh, and fish. `make install` puts the files in the standard locations.
 - A GitHub Actions workflow that builds and tests on Ubuntu, and builds the Arch Linux package with `makepkg`.
 - This changelog, a contributing guide, and a security policy.
+- `make distclean`, which also removes test caches and built packages. Installed files and the registry are never touched.
 
 ### Changed
 

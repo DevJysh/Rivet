@@ -37,6 +37,12 @@ clean:
 	rm -f rivet
 	rm -rf dist
 
+# Everything generated: the clean outputs, test caches, and built packages.
+# Installed files and the registry under ~/.local/share are never touched.
+distclean: clean
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	rm -f *.pkg.tar.*
+
 # The release tarball: the stripped binaries, the GUI, the docs, and checksums.
 dist: rivet
 	rm -rf dist && mkdir -p dist/rivet-$(VERSION)
@@ -47,4 +53,4 @@ dist: rivet
 	cd dist && sha256sum rivet-$(VERSION)-x86_64.tar.gz > SHA256SUMS
 	@cat dist/SHA256SUMS
 
-.PHONY: all test install uninstall clean dist
+.PHONY: all test install uninstall clean distclean dist
