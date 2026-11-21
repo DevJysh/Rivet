@@ -66,6 +66,12 @@ jobs:
       - name: Check the git sources as the builder user
         run: su - builder -c "git ls-remote https://github.com/DevJysh/Rivet.git refs/tags/v0.1.0 && git ls-remote https://github.com/aardappel/goose.git refs/tags/v2026.4"
 
+      - name: Clone the Rivet mirror as the builder user
+        run: su - builder -c "rm -rf /tmp/mirror-test && git clone --mirror https://github.com/DevJysh/Rivet.git /tmp/mirror-test"
+
+      - name: Fetch the sources with the cache outside the workspace
+        run: su - builder -c "mkdir -p /tmp/srcdest && cd '$GITHUB_WORKSPACE' && SRCDEST=/tmp/srcdest makepkg -o --noconfirm"
+
       - name: Fetch the sources
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -o --noconfirm"
 
