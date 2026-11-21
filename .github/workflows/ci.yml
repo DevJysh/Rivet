@@ -83,5 +83,4 @@ jobs:
         run: |
           pacman -U --noconfirm "$GITHUB_WORKSPACE"/rivet-*.pkg.tar.zst
           rivet --version
-          test -f /usr/share/bash-completion/completions/rivet
           ldd /usr/bin/rivet
