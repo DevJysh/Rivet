@@ -57,7 +57,7 @@ jobs:
       - name: Build the package with makepkg
         run: |
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          su builder -c "cd '$GITHUB_WORKSPACE/' && makepkg -f --noconfirm"
+          su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -f --noconfirm"
 
       - name: Install the package and check it
         run: |
