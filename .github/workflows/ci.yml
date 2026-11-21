@@ -83,6 +83,14 @@ jobs:
         continue-on-error: true
         run: su - builder -c "cd '$GITHUB_WORKSPACE/src/rivet' && python3 tests/gui_test.py ./rivet"
 
+      - name: The package's check, run directly
+        continue-on-error: true
+        run: su - builder -c "cd '$GITHUB_WORKSPACE/src/rivet' && make GOOSE='$GITHUB_WORKSPACE/src/goose-build/goose' test"
+
+      - name: The package's check, with makepkg's flags
+        continue-on-error: true
+        run: su - builder -c "cd '$GITHUB_WORKSPACE/src/rivet' && MAKEFLAGS=-j2 CFLAGS='-O2 -pipe -fno-plt -fexceptions -Wp,-D_FORTIFY_SOURCE=3 -Wformat -Werror=format-security -fstack-clash-protection -fcf-protection -g -ffile-prefix-map=$GITHUB_WORKSPACE/src/rivet=rivet' make GOOSE='$GITHUB_WORKSPACE/src/goose-build/goose' test"
+
       - name: Run the check step and package again
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm"
 
