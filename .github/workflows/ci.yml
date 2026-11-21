@@ -72,6 +72,17 @@ jobs:
       - name: Build and package, without the check step
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm --nocheck"
 
+      - name: Show the shell and tools
+        run: su - builder -c "readlink -f /bin/sh; cc --version | head -1; python3 --version; ls '$GITHUB_WORKSPACE/src/rivet' | head -30"
+
+      - name: Smoke tests from the package source
+        continue-on-error: true
+        run: su - builder -c "cd '$GITHUB_WORKSPACE/src/rivet' && sh tests/smoke.sh ./rivet"
+
+      - name: GUI tests from the package source
+        continue-on-error: true
+        run: su - builder -c "cd '$GITHUB_WORKSPACE/src/rivet' && python3 tests/gui_test.py ./rivet"
+
       - name: Run the check step and package again
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm"
 
