@@ -259,6 +259,42 @@ sh -c "$act" >/dev/null 2>&1 || true
 check "running the Uninstall action removes the app" sh -c "! ls '$apps' | grep -qi 'gizmo'"
 check "and its menu entry" test ! -e "$entry"
 
+# --- verbose output, list --ids, and shell completion ------------------------
+
+cp "$tmp/fake" "$tmp/Verbo-1.0-x86_64.AppImage"
+vout=$("$rivet" install --verbose "$tmp/Verbo-1.0-x86_64.AppImage" 2>&1 >/dev/null)
+case "$vout" in *"identity: Verbo 1.0"*"registry saved"*) pass "--verbose prints each install step" ;;
+    *) bad "--verbose prints each install step (got: $vout)" ;; esac
+vout=$("$rivet" uninstall --verbose verbo 2>&1 >/dev/null)
+case "$vout" in *"removing "*) pass "--verbose prints each uninstall step" ;;
+    *) bad "--verbose prints each uninstall step (got: $vout)" ;; esac
+qerr=$("$rivet" install "$tmp/Verbo-1.0-x86_64.AppImage" 2>&1 >/dev/null)
+check "a quiet install writes nothing to stderr" test -z "$qerr"
+ids=$("$rivet" list --ids)
+check "list --ids prints the identifiers, one per line" sh -c "printf '%s\n' \"\$1\" | grep -qx verbo" _ "$ids"
+check "uninstall removes the identifier from list --ids" sh -c "'$rivet' uninstall verbo >/dev/null 2>&1 && ! '$rivet' list --ids | grep -qx verbo"
+check "list rejects --verbose" sh -c "! '$rivet' list --verbose >/dev/null 2>&1"
+check "install rejects --ids" sh -c "! '$rivet' install --ids '$tmp/Verbo-1.0-x86_64.AppImage' >/dev/null 2>&1"
+check "the zsh completion is installed in the repo" test -f "$here/../completions/_rivet"
+check "the fish completion is installed in the repo" test -f "$here/../completions/rivet.fish"
+if command -v bash >/dev/null 2>&1; then
+    check "the bash completion parses" bash -n "$here/../completions/rivet.bash"
+fi
+
+# --- uninstall --all ---------------------------------------------------------
+
+cp "$tmp/fake" "$tmp/Allone-1.0-x86_64.AppImage"
+"$rivet" install "$tmp/Allone-1.0-x86_64.AppImage" >/dev/null 2>&1
+aout=$("$rivet" uninstall --all </dev/null 2>&1 || true)
+case "$aout" in *"Pass --yes"*) pass "uninstall --all refuses without a terminal or --yes" ;;
+    *) bad "uninstall --all refuses without a terminal or --yes (got: $aout)" ;; esac
+check "and removes nothing when it refuses" sh -c "'$rivet' list --ids | grep -qx allone"
+check "uninstall --all rejects a name" sh -c "! '$rivet' uninstall --all allone >/dev/null 2>&1"
+check "uninstall --all --yes succeeds" "$rivet" uninstall --all --yes
+check "uninstall --all --yes leaves no apps registered" test -z "$("$rivet" list --ids)"
+check "and removes their files" sh -c "! ls '$apps' 2>/dev/null | grep -q ."
+check "and their menu entries" sh -c "! ls '$XDG_DATA_HOME/applications' 2>/dev/null | grep -q '^rivet-'"
+
 # --- a damaged registry is ignored, not fatal --------------------------------
 
 printf 'garbage' > "$data/registry.bin"

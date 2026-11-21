@@ -22,12 +22,14 @@ It is written in [Goose](https://github.com/aardappel/goose) and builds to a sin
 - [Quick start](#quick-start)
 - [Install](#install)
 - [Usage](#usage)
+- [Shell completion](#shell-completion)
 - [Updates](#updates)
 - [Graphical front end](#graphical-front-end)
 - [Double-click install](#double-click-install)
 - [Files](#files)
 - [Security](#security)
 - [Limitations](#limitations)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## Why Rivet
@@ -69,11 +71,13 @@ cd Rivet
 makepkg -si
 ```
 
+If you have run `make` in the clone, run `make distclean` first. makepkg downloads its sources into the same folder, and a built `rivet` file there would clash with them.
+
 **Other distributions**
 
 ```bash
 git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose
-cmake -S goose -B goose/build -DCMAKE_BUILD_TYPE=Release
+cmake -S goose -B goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
 cmake --build goose/build
 
 git clone https://github.com/DevJysh/Rivet
@@ -84,6 +88,8 @@ sudo make install
 
 `make install` puts `rivet` and `rivet-gui` in `/usr/local/bin`. Use `PREFIX=/usr` for `/usr/bin`. To run the tests, use `make GOOSE=../goose/build/goose test`.
 
+The Goose build passes `-w` to hide about 40 compiler warnings from Goose's own source. They are not from Rivet and do not affect the result. Leave out the two `-w` flags to see them. Rivet's own build prints none.
+
 ## Usage
 
 | Command | Description |
@@ -91,8 +97,12 @@ sudo make install
 | `rivet install <file.AppImage>` | Install an AppImage. An installed application of the same name is updated only after confirmation. |
 | `rivet install --dry-run <file.AppImage>` | Show what an install would do, and change nothing. |
 | `rivet install --yes <file.AppImage>` | Install and replace an installed version without asking. |
+| `rivet install --verbose <file.AppImage>` | Print each step of the install to stderr. |
 | `rivet uninstall <name>` | Remove an installed application. The name is case-insensitive. |
+| `rivet uninstall --verbose <name>` | Print each step of the removal to stderr. |
+| `rivet uninstall --all` | Remove every installed application, after confirmation. Without a terminal, add `--yes`. |
 | `rivet list` | List installed applications with their version, size, and install time. |
+| `rivet list --ids` | Print only the identifiers, one per line, for scripts. |
 | `rivet info <name>` | Show the files, size, install time, and menu entry of one application. |
 | `rivet register` | Open AppImage files with Rivet on double-click. |
 | `rivet <command> --help` | Show the help for one command. |
@@ -101,6 +111,16 @@ sudo make install
 Output is plain text when it is piped or redirected, so scripts can read it. In a terminal, Rivet uses color and shows progress while it works. Set `NO_COLOR` to turn color off.
 
 Rivet reads the name and version from the file name. For example, `Krita-5.2.1-x86_64.AppImage` is Krita 5.2.1, and its ID is `krita`.
+
+## Shell completion
+
+`make install` installs completion for bash, zsh, and fish, in the standard locations for each shell:
+
+- bash: `share/bash-completion/completions/rivet`
+- zsh: `share/zsh/site-functions/_rivet`
+- fish: `share/fish/vendor_completions.d/rivet.fish`
+
+Completion covers the commands and their flags. `uninstall` and `info` also complete the names of installed applications. Open a new shell after installing, so the completion loads.
 
 ## Updates
 
@@ -157,19 +177,25 @@ The registry is a binary file written with Goose's `to_bytes()` and read with `f
 - Rivet checks the ELF header and the AppImage signature before it runs anything.
 - Rivet never follows symbolic links while it searches for icons or cleans up, so a link inside an AppImage cannot make it touch files outside its own folders.
 
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
 ## Limitations
 
 - **Icons** are extracted only from AppImages built with the type 2 runtime, the common format. Other AppImages install with the default icon.
 - **Updates** are matched by application name. Rivet does not check for new releases.
 - **Versions** come from the file name. A name without a `Name-version` pattern has no version.
 - **Desktop entries** are minimal: `Categories=Utility;`. Edit the `.desktop` file to change them.
-- **Tested platforms:** Debian 12. The Arch `PKGBUILD` steps were replayed from the `v0.1.0` tag, but `makepkg` itself has not been run.
+- **Tested platforms:** Debian 12, locally. The CI workflow builds and tests on Ubuntu and builds the Arch package with `makepkg`. Its first runs have not been checked yet.
 - **Menu actions and the handler use the binary's path.** Reinstall apps, or run `rivet register`, after moving Rivet.
 - **Desktop integration** has not been checked in a real desktop. The `register` command was tested with a stub `xdg-mime`, and the graphical front end has not been opened on a display.
 
 ## Releases
 
-Each release is a tarball with the stripped `rivet` binary, the `rivet-gui` script, the README, the license, and a `SHA256SUMS` file. Build the same tarball locally with `make dist`.
+Each release is a tarball with the stripped `rivet` binary, the `rivet-gui` script, the README, the license, and a `SHA256SUMS` file. Build the same tarball locally with `make dist`. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## Contributing
+
+Bug reports, fixes, and ideas are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test, and send a change.
 
 ## License
 

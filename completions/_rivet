@@ -1,0 +1,52 @@
+#compdef rivet
+# Zsh completion for rivet. Installed by `make install` into the site-functions
+# directory, which is on $fpath by default.
+
+_rivet() {
+    local -a commands ids
+    commands=(
+        'install:install an AppImage'
+        'uninstall:remove an installed application'
+        'list:list installed applications'
+        'info:show one installed application'
+        'register:make Rivet open AppImage files'
+        'help:show usage'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe -t commands 'rivet command' commands
+        return
+    fi
+
+    case $words[2] in
+        install)
+            _arguments \
+                '(-y --yes)'{-y,--yes}'[replace an installed version without asking]' \
+                '--dry-run[show what would happen, and change nothing]' \
+                '(-v --verbose)'{-v,--verbose}'[print each step to stderr]' \
+                '--wait[keep the window open until Enter is pressed]' \
+                '*:AppImage file:_files -g "*.[Aa]pp[Ii]mage"'
+            ;;
+        uninstall)
+            _arguments \
+                '(-v --verbose)'{-v,--verbose}'[print each step to stderr]' \
+                '1:installed application:->apps'
+            if [[ $state == apps ]]; then
+                ids=(${(f)"$(rivet list --ids 2>/dev/null)"})
+                compadd -a ids
+            fi
+            ;;
+        info)
+            _arguments '1:installed application:->apps'
+            if [[ $state == apps ]]; then
+                ids=(${(f)"$(rivet list --ids 2>/dev/null)"})
+                compadd -a ids
+            fi
+            ;;
+        list)
+            _arguments '--ids[print only the identifiers, one per line]'
+            ;;
+    esac
+}
+
+_rivet "$@"

@@ -29,7 +29,7 @@ source=(
 sha256sums=('SKIP' 'SKIP')
 
 build() {
-  cmake -S goose -B goose-build -DCMAKE_BUILD_TYPE=Release
+  cmake -S goose -B goose-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
   cmake --build goose-build --config Release
   make -C "$pkgname" GOOSE="$srcdir/goose-build/goose"
 }

@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: Ubuntu, build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Goose compiler
+        run: |
+          git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose.git ../goose
+          cmake -S ../goose -B ../goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
+          cmake --build ../goose/build -j"$(nproc)"
+
+      - name: Build Rivet
+        run: make GOOSE=../goose/build/goose
+
+      - name: Run the tests
+        run: make GOOSE=../goose/build/goose test
+
+  arch:
+    name: Arch Linux, makepkg
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install the build tools
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm base-devel git cmake python
+          useradd -m builder
+
+      - uses: actions/checkout@v4
+
+      - name: Build the Goose compiler
+        run: |
+          git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose.git /tmp/goose
+          cmake -S /tmp/goose -B /tmp/goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
+          cmake --build /tmp/goose/build -j"$(nproc)"
+
+      - name: Build and test the working tree
+        run: |
+          make GOOSE=/tmp/goose/build/goose
+          make GOOSE=/tmp/goose/build/goose test
+
+      # makepkg downloads git sources into the PKGBUILD's folder, which is this
+      # checkout. A built rivet binary there would clash with the Rivet source
+      # folder makepkg creates, so the build outputs are removed first.
+      - name: Remove the build outputs from the checkout
+        run: make distclean
+
+      # makepkg refuses to run as root, so the package is built as a normal user
+      # from a login shell. The PKGBUILD fetches the v0.1.0 tag, so this checks
+      # the packaging; the working tree is covered by the test step above.
+      - name: Give the builder user the checkout
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Read the PKGBUILD
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > /dev/null"
+
+      - name: Fetch the sources
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -o --noconfirm"
+
+      - name: Build and package, without the check step
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm --nocheck"
+
+      - name: Run the check step and package again
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e -f --noconfirm" > /tmp/makepkg-check.log 2>&1
+
+      - name: Report the makepkg output if it failed
+        if: failure()
+        run: tail -c 6000 /tmp/makepkg-check.log | python3 -c 'import sys; print("::error::" + sys.stdin.read().replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+
+      - name: Install the package and check it
+        run: |
+          pacman -U --noconfirm "$GITHUB_WORKSPACE"/rivet-*.pkg.tar.zst
+          rivet --version
+          ldd /usr/bin/rivet

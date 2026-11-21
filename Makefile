@@ -23,13 +23,25 @@ test: rivet
 install: rivet
 	install -Dm755 -s rivet "$(DESTDIR)$(PREFIX)/bin/rivet"
 	install -Dm755 gui/rivet-gui "$(DESTDIR)$(PREFIX)/bin/rivet-gui"
+	install -Dm644 completions/rivet.bash "$(DESTDIR)$(PREFIX)/share/bash-completion/completions/rivet"
+	install -Dm644 completions/_rivet "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_rivet"
+	install -Dm644 completions/rivet.fish "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/rivet.fish"
 
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/rivet" "$(DESTDIR)$(PREFIX)/bin/rivet-gui"
+	rm -f "$(DESTDIR)$(PREFIX)/share/bash-completion/completions/rivet"
+	rm -f "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_rivet"
+	rm -f "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/rivet.fish"
 
 clean:
 	rm -f rivet
 	rm -rf dist
+
+# Everything generated: the clean outputs, test caches, and built packages.
+# Installed files and the registry under ~/.local/share are never touched.
+distclean: clean
+	find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	rm -f *.pkg.tar.*
 
 # The release tarball: the stripped binaries, the GUI, the docs, and checksums.
 dist: rivet
@@ -41,4 +53,4 @@ dist: rivet
 	cd dist && sha256sum rivet-$(VERSION)-x86_64.tar.gz > SHA256SUMS
 	@cat dist/SHA256SUMS
 
-.PHONY: all test install uninstall clean dist
+.PHONY: all test install uninstall clean distclean dist
