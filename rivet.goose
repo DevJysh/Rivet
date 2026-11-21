@@ -67,6 +67,9 @@ struct Pick {
 // $XDG_DATA_HOME, or ~/.local/share. Set once by main before any command runs.
 var data_home: u8[>..];
 
+// Set by --verbose: install and uninstall print each step to stderr.
+var verbose: bool = false;
+
 // --- small helpers ------------------------------------------------------------
 
 fn fail(msg: u8[:]) {
@@ -90,6 +93,13 @@ fn styled(code: u8[:], s: u8[:], fd: i32) -> u8[>..] {
 fn note(msg: u8[:]) {
     if rv_isatty(2) == 1 {
         write_stderr(str(styled("2", msg, 2), "\n"));
+    }
+}
+
+// A step for --verbose. Unlike note, it prints even when stderr is not a terminal.
+fn detail(msg: u8[:]) {
+    if verbose {
+        write_stderr(str("  ", msg, "\n"));
     }
 }
 
@@ -513,6 +523,7 @@ fn install(src: u8[:], yes: bool) -> i32 {
     if !read_identity(src, name, version, id) {
         return 1;
     }
+    detail(str("identity: ", name, " ", version, " (id ", id, ")"));
     let base = basename(src);
 
     var apps = load_registry();
@@ -529,6 +540,7 @@ fn install(src: u8[:], yes: bool) -> i32 {
 
     var change: i64 = 0;
     if replacing {
+        detail(str("already installed: ", old_label));
         change = compare_versions(old_version, version);
         if change == 0 {
             fail(str(old_label, " is already installed"));
@@ -569,10 +581,16 @@ fn install(src: u8[:], yes: bool) -> i32 {
         return 1;
     }
     rv_chmod(dest, EXEC_MODE);
+    detail(str("copied to ", dest, " (mode 755)"));
 
     // The icon is optional: a missing one just means the default icon.
     note("extracting the icon");
     let icon = extract_icon(dest, id);
+    if icon.len > 0 {
+        detail(str("icon: ", icon));
+    } else {
+        detail("no icon in the AppImage; the default icon will be used");
+    }
 
     // Write the menu entry, then record the install. If either step fails,
     // the new copy and its icon are removed. The old version of an app that is
@@ -589,6 +607,7 @@ fn install(src: u8[:], yes: bool) -> i32 {
         fail("could not write the desktop entry");
         return 1;
     }
+    detail(str("menu entry: ", desk));
 
     var updated: AppEntry[>..] = [];
     for e in apps {
@@ -612,10 +631,15 @@ fn install(src: u8[:], yes: bool) -> i32 {
         return 1;
     }
 
+    detail("registry saved");
+
     // The old version's files are removed only once the new ones are in place.
     for e in apps {
         if e.id[..] == id[..] {
-            if e.path[..] != dest[..] { delete_file(e.path); }
+            if e.path[..] != dest[..] {
+                detail(str("removed the old copy ", e.path));
+                delete_file(e.path);
+            }
             if e.icon.len > 0 && e.icon[..] != icon[..] { delete_file(e.icon); }
         }
     }
@@ -663,9 +687,15 @@ fn uninstall(name: u8[:]) -> i32 {
         fail("could not update the registry; nothing was removed");
         return 1;
     }
+    detail("registry saved");
+    detail(str("removing ", gone_path));
     delete_file(gone_path);
+    detail(str("removing ", gone_desk));
     delete_file(gone_desk);
-    if gone_icon.len > 0 { delete_file(gone_icon); }
+    if gone_icon.len > 0 {
+        detail(str("removing ", gone_icon));
+        delete_file(gone_icon);
+    }
     refresh_desktop_db();
     print(styled("1;32", "removed", 1), " ", shown);
     return 0;
@@ -712,8 +742,15 @@ fn register_handler() -> i32 {
     return 1;
 }
 
-fn list_apps() -> i32 {
+fn list_apps(ids: bool) -> i32 {
     let apps = load_registry();
+    if ids {
+        // One identifier per line, and nothing else: for shell completion and scripts.
+        for e in apps {
+            print(e.id[..]);
+        }
+        return 0;
+    }
     if apps.len == 0 {
         print("no AppImages installed. Add one with: rivet install <file.AppImage>");
         return 0;
@@ -805,7 +842,7 @@ fn dry_run(src: u8[:]) -> i32 {
 // The help for one command, or false when there is no such command.
 fn help_for(cmd: u8[:]) -> bool {
     if cmd == "install" {
-        print(styled("1", "rivet install", 1), " [--yes] [--dry-run] <file.AppImage>");
+        print(styled("1", "rivet install", 1), " [--yes] [--dry-run] [--verbose] <file.AppImage>");
         print();
         print("Install an AppImage into the application menu. If an application with");
         print("the same name is already installed, the versions are compared: a newer");
@@ -814,19 +851,24 @@ fn help_for(cmd: u8[:]) -> bool {
         print();
         print("  --yes       replace an installed version without asking");
         print("  --dry-run   show what would happen, and change nothing");
+        print("  --verbose   print each step to stderr");
         print("  --wait      keep the window open until Enter is pressed (used by double-click)");
         return true;
     }
     if cmd == "uninstall" {
-        print(styled("1", "rivet uninstall", 1), " <name>");
+        print(styled("1", "rivet uninstall", 1), " [--verbose] <name>");
         print();
         print("Remove an installed application and its files. The name is case-insensitive.");
+        print();
+        print("  --verbose   print each step to stderr");
         return true;
     }
     if cmd == "list" {
-        print(styled("1", "rivet list", 1));
+        print(styled("1", "rivet list", 1), " [--ids]");
         print();
         print("List installed applications with their version, size, and install time.");
+        print();
+        print("  --ids       print only the identifiers, one per line");
         return true;
     }
     if cmd == "info" {
@@ -847,9 +889,9 @@ fn help_for(cmd: u8[:]) -> bool {
 
 fn usage() {
     print(styled("1", "usage:", 1));
-    print("  rivet install [--yes] [--dry-run] <file.AppImage>");
-    print("  rivet uninstall <name>");
-    print("  rivet list");
+    print("  rivet install [--yes] [--dry-run] [--verbose] <file.AppImage>");
+    print("  rivet uninstall [--verbose] <name>");
+    print("  rivet list [--ids]");
     print("  rivet info <name>");
     print("  rivet register");
     print("  rivet --version");
@@ -872,6 +914,7 @@ fn main() {
     var yes = false;
     var wait = false;
     var dry = false;
+    var ids = false;
     var help = false;
     var operands = 0;
     var operand = 0;
@@ -882,6 +925,10 @@ fn main() {
             wait = true;
         } else if a[i] == "--dry-run" {
             dry = true;
+        } else if a[i] == "--verbose" || a[i] == "-v" {
+            verbose = true;
+        } else if a[i] == "--ids" {
+            ids = true;
         } else if a[i] == "--help" || a[i] == "-h" {
             help = true;
         } else {
@@ -893,18 +940,18 @@ fn main() {
     var status: i32 = 2;
     if help && a.len >= 2 && help_for(a[1]) {
         status = 0;
-    } else if a.len >= 2 && a[1] == "install" && operands == 1 {
+    } else if a.len >= 2 && a[1] == "install" && operands == 1 && !ids {
         if dry {
             status = dry_run(a[operand]);
         } else {
             status = install(a[operand], yes);
         }
-    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait && !dry {
+    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait && !dry && !ids {
         status = uninstall(a[operand]);
-    } else if a.len >= 2 && a[1] == "info" && operands == 1 && !yes && !wait && !dry {
+    } else if a.len >= 2 && a[1] == "info" && operands == 1 && !yes && !wait && !dry && !verbose && !ids {
         status = info(a[operand]);
-    } else if a.len == 2 && a[1] == "list" {
-        status = list_apps();
+    } else if a.len >= 2 && a[1] == "list" && operands == 0 && !yes && !wait && !dry && !verbose {
+        status = list_apps(ids);
     } else if a.len == 2 && a[1] == "register" {
         status = register_handler();
     } else if a.len == 2 && (a[1] == "--version" || a[1] == "version") {

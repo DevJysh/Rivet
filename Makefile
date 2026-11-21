@@ -23,9 +23,15 @@ test: rivet
 install: rivet
 	install -Dm755 -s rivet "$(DESTDIR)$(PREFIX)/bin/rivet"
 	install -Dm755 gui/rivet-gui "$(DESTDIR)$(PREFIX)/bin/rivet-gui"
+	install -Dm644 completions/rivet.bash "$(DESTDIR)$(PREFIX)/share/bash-completion/completions/rivet"
+	install -Dm644 completions/_rivet "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_rivet"
+	install -Dm644 completions/rivet.fish "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/rivet.fish"
 
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/rivet" "$(DESTDIR)$(PREFIX)/bin/rivet-gui"
+	rm -f "$(DESTDIR)$(PREFIX)/share/bash-completion/completions/rivet"
+	rm -f "$(DESTDIR)$(PREFIX)/share/zsh/site-functions/_rivet"
+	rm -f "$(DESTDIR)$(PREFIX)/share/fish/vendor_completions.d/rivet.fish"
 
 clean:
 	rm -f rivet

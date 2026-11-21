@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: Ubuntu, build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Goose compiler
+        run: |
+          git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose.git ../goose
+          cmake -S ../goose -B ../goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
+          cmake --build ../goose/build -j"$(nproc)"
+
+      - name: Build Rivet
+        run: make GOOSE=../goose/build/goose
+
+      - name: Run the tests
+        run: make GOOSE=../goose/build/goose test
+
+  arch:
+    name: Arch Linux, makepkg
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install the build tools
+        run: |
+          pacman-key --init
+          pacman-key --populate archlinux
+          pacman -Syu --noconfirm base-devel git cmake python
+          useradd -m builder
+
+      - uses: actions/checkout@v4
+
+      - name: Build the Goose compiler
+        run: |
+          git clone --depth 1 --branch v2026.4 https://github.com/aardappel/goose.git /tmp/goose
+          cmake -S /tmp/goose -B /tmp/goose/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-w -DCMAKE_CXX_FLAGS=-w
+          cmake --build /tmp/goose/build -j"$(nproc)"
+
+      - name: Build and test the working tree
+        run: |
+          make GOOSE=/tmp/goose/build/goose
+          make GOOSE=/tmp/goose/build/goose test
+
+      # makepkg refuses to run as root, so the package is built as a normal
+      # user. The PKGBUILD fetches the v0.1.0 tag, so this step checks that the
+      # packaging works; the working tree is covered by the step above.
+      - name: Build the package with makepkg
+        run: |
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE/' && makepkg -f --noconfirm"
+
+      - name: Install the package and check it
+        run: |
+          pacman -U --noconfirm "$GITHUB_WORKSPACE"/rivet-*.pkg.tar.zst
+          rivet --version
+          test -f /usr/share/bash-completion/completions/rivet
+          ldd /usr/bin/rivet

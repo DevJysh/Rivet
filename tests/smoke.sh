@@ -259,6 +259,28 @@ sh -c "$act" >/dev/null 2>&1 || true
 check "running the Uninstall action removes the app" sh -c "! ls '$apps' | grep -qi 'gizmo'"
 check "and its menu entry" test ! -e "$entry"
 
+# --- verbose output, list --ids, and shell completion ------------------------
+
+cp "$tmp/fake" "$tmp/Verbo-1.0-x86_64.AppImage"
+vout=$("$rivet" install --verbose "$tmp/Verbo-1.0-x86_64.AppImage" 2>&1 >/dev/null)
+case "$vout" in *"identity: Verbo 1.0"*"registry saved"*) pass "--verbose prints each install step" ;;
+    *) bad "--verbose prints each install step (got: $vout)" ;; esac
+vout=$("$rivet" uninstall --verbose verbo 2>&1 >/dev/null)
+case "$vout" in *"removing "*) pass "--verbose prints each uninstall step" ;;
+    *) bad "--verbose prints each uninstall step (got: $vout)" ;; esac
+qerr=$("$rivet" install "$tmp/Verbo-1.0-x86_64.AppImage" 2>&1 >/dev/null)
+check "a quiet install writes nothing to stderr" test -z "$qerr"
+ids=$("$rivet" list --ids)
+check "list --ids prints the identifiers, one per line" sh -c "printf '%s\n' \"\$1\" | grep -qx verbo" _ "$ids"
+check "uninstall removes the identifier from list --ids" sh -c "'$rivet' uninstall verbo >/dev/null 2>&1 && ! '$rivet' list --ids | grep -qx verbo"
+check "list rejects --verbose" sh -c "! '$rivet' list --verbose >/dev/null 2>&1"
+check "install rejects --ids" sh -c "! '$rivet' install --ids '$tmp/Verbo-1.0-x86_64.AppImage' >/dev/null 2>&1"
+check "the zsh completion is installed in the repo" test -f "$here/../completions/_rivet"
+check "the fish completion is installed in the repo" test -f "$here/../completions/rivet.fish"
+if command -v bash >/dev/null 2>&1; then
+    check "the bash completion parses" bash -n "$here/../completions/rivet.bash"
+fi
+
 # --- a damaged registry is ignored, not fatal --------------------------------
 
 printf 'garbage' > "$data/registry.bin"
