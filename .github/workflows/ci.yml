@@ -73,7 +73,7 @@ jobs:
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm --nocheck"
 
       - name: Run the check step and package again
-        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e --noconfirm" > /tmp/makepkg-check.log 2>&1
+        run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -e -f --noconfirm" > /tmp/makepkg-check.log 2>&1
 
       - name: Report the makepkg output if it failed
         if: failure()
