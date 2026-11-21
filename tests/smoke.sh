@@ -281,6 +281,20 @@ if command -v bash >/dev/null 2>&1; then
     check "the bash completion parses" bash -n "$here/../completions/rivet.bash"
 fi
 
+# --- uninstall --all ---------------------------------------------------------
+
+cp "$tmp/fake" "$tmp/Allone-1.0-x86_64.AppImage"
+"$rivet" install "$tmp/Allone-1.0-x86_64.AppImage" >/dev/null 2>&1
+aout=$("$rivet" uninstall --all </dev/null 2>&1 || true)
+case "$aout" in *"Pass --yes"*) pass "uninstall --all refuses without a terminal or --yes" ;;
+    *) bad "uninstall --all refuses without a terminal or --yes (got: $aout)" ;; esac
+check "and removes nothing when it refuses" sh -c "'$rivet' list --ids | grep -qx allone"
+check "uninstall --all rejects a name" sh -c "! '$rivet' uninstall --all allone >/dev/null 2>&1"
+check "uninstall --all --yes succeeds" "$rivet" uninstall --all --yes
+check "uninstall --all --yes leaves no apps registered" test -z "$("$rivet" list --ids)"
+check "and removes their files" sh -c "! ls '$apps' 2>/dev/null | grep -q ."
+check "and their menu entries" sh -c "! ls '$XDG_DATA_HOME/applications' 2>/dev/null | grep -q '^rivet-'"
+
 # --- a damaged registry is ignored, not fatal --------------------------------
 
 printf 'garbage' > "$data/registry.bin"

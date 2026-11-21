@@ -9,6 +9,7 @@ All notable changes to Rivet are listed here. The format follows
 ### Added
 
 - `--verbose` (`-v`) for `install` and `uninstall`. It prints each step to stderr.
+- `rivet uninstall --all`, which removes every installed application. It asks first, and needs `--yes` when there is no terminal.
 - `rivet list --ids`, which prints one identifier per line for scripts and shell completion.
 - Shell completion for bash, zsh, and fish. `make install` puts the files in the standard locations.
 - A GitHub Actions workflow that builds and tests on Ubuntu, and builds the Arch Linux package with `makepkg`.
@@ -17,6 +18,7 @@ All notable changes to Rivet are listed here. The format follows
 
 ### Changed
 
+- The 0.1.0 release tarball is no longer kept in the repository. Release files belong on the GitHub release.
 - The Goose build in the README and the PKGBUILD passes `-w`, which hides about 40 compiler warnings from Goose's own source. Rivet's build prints none either way.
 
 ## [0.1.0] - 2026-11-11

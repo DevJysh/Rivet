@@ -701,6 +701,49 @@ fn uninstall(name: u8[:]) -> i32 {
     return 0;
 }
 
+// Removes every installed application: the same four things per app as
+// uninstall, for each record. Asks first, as install does; without a terminal
+// or --yes, nothing is removed. The registry is emptied first, so a failed
+// write removes nothing.
+fn uninstall_all(yes: bool) -> i32 {
+    let apps = load_registry();
+    if apps.len == 0 {
+        print("no AppImages installed. Nothing to remove.");
+        return 0;
+    }
+    if !yes {
+        if rv_is_tty() == 0 {
+            fail(str(apps.len, " AppImages are installed. Pass --yes to remove them all."));
+            return 1;
+        }
+        var question: u8[>..] = [];
+        format(question, "Remove all ", apps.len, " installed AppImages? [y/N] ");
+        if !confirm(question) {
+            print("nothing changed");
+            return 1;
+        }
+    }
+
+    var none: AppEntry[>..] = [];
+    if !save_registry(none) {
+        fail("could not update the registry; nothing was removed");
+        return 1;
+    }
+    for e in apps {
+        detail(str("removing ", e.path));
+        delete_file(e.path);
+        detail(str("removing ", e.desktop));
+        delete_file(e.desktop);
+        if e.icon.len > 0 {
+            detail(str("removing ", e.icon));
+            delete_file(e.icon);
+        }
+        print(styled("1;32", "removed", 1), " ", label(e.name, e.version));
+    }
+    refresh_desktop_db();
+    return 0;
+}
+
 // Makes Rivet the program that opens AppImage files, so a double-click installs
 // them. The entry is rivet.desktop; its name cannot collide with rivet-<id>.desktop.
 fn register_handler() -> i32 {
@@ -857,9 +900,12 @@ fn help_for(cmd: u8[:]) -> bool {
     }
     if cmd == "uninstall" {
         print(styled("1", "rivet uninstall", 1), " [--verbose] <name>");
+        print("       rivet uninstall --all [--yes] [--verbose]");
         print();
         print("Remove an installed application and its files. The name is case-insensitive.");
         print();
+        print("  --all       remove every installed application (asks first)");
+        print("  --yes       with --all, remove them without asking");
         print("  --verbose   print each step to stderr");
         return true;
     }
@@ -891,6 +937,7 @@ fn usage() {
     print(styled("1", "usage:", 1));
     print("  rivet install [--yes] [--dry-run] [--verbose] <file.AppImage>");
     print("  rivet uninstall [--verbose] <name>");
+    print("  rivet uninstall --all [--yes] [--verbose]");
     print("  rivet list [--ids]");
     print("  rivet info <name>");
     print("  rivet register");
@@ -915,6 +962,7 @@ fn main() {
     var wait = false;
     var dry = false;
     var ids = false;
+    var all = false;
     var help = false;
     var operands = 0;
     var operand = 0;
@@ -929,6 +977,8 @@ fn main() {
             verbose = true;
         } else if a[i] == "--ids" {
             ids = true;
+        } else if a[i] == "--all" {
+            all = true;
         } else if a[i] == "--help" || a[i] == "-h" {
             help = true;
         } else {
@@ -946,7 +996,9 @@ fn main() {
         } else {
             status = install(a[operand], yes);
         }
-    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !yes && !wait && !dry && !ids {
+    } else if a.len >= 2 && a[1] == "uninstall" && !wait && !dry && !ids && all && operands == 0 {
+        status = uninstall_all(yes);
+    } else if a.len >= 2 && a[1] == "uninstall" && operands == 1 && !all && !yes && !wait && !dry && !ids {
         status = uninstall(a[operand]);
     } else if a.len >= 2 && a[1] == "info" && operands == 1 && !yes && !wait && !dry && !verbose && !ids {
         status = info(a[operand]);

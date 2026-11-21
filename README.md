@@ -98,6 +98,7 @@ The Goose build passes `-w` to hide about 40 compiler warnings from Goose's own 
 | `rivet install --verbose <file.AppImage>` | Print each step of the install to stderr. |
 | `rivet uninstall <name>` | Remove an installed application. The name is case-insensitive. |
 | `rivet uninstall --verbose <name>` | Print each step of the removal to stderr. |
+| `rivet uninstall --all` | Remove every installed application, after confirmation. Without a terminal, add `--yes`. |
 | `rivet list` | List installed applications with their version, size, and install time. |
 | `rivet list --ids` | Print only the identifiers, one per line, for scripts. |
 | `rivet info <name>` | Show the files, size, install time, and menu entry of one application. |
