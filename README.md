@@ -71,6 +71,8 @@ cd Rivet
 makepkg -si
 ```
 
+If you have run `make` in the clone, run `make distclean` first. makepkg downloads its sources into the same folder, and a built `rivet` file there would clash with them.
+
 **Other distributions**
 
 ```bash

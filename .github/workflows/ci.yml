@@ -51,26 +51,20 @@ jobs:
           make GOOSE=/tmp/goose/build/goose
           make GOOSE=/tmp/goose/build/goose test
 
-      # makepkg refuses to run as root, so the package is built as a normal
-      # user. The PKGBUILD fetches the v0.1.0 tag, so this step checks that the
-      # packaging works; the working tree is covered by the step above.
-      - name: Give the builder user the workspace
+      # makepkg downloads git sources into the PKGBUILD's folder, which is this
+      # checkout. A built rivet binary there would clash with the Rivet source
+      # folder makepkg creates, so the build outputs are removed first.
+      - name: Remove the build outputs from the checkout
+        run: make distclean
+
+      # makepkg refuses to run as root, so the package is built as a normal user
+      # from a login shell. The PKGBUILD fetches the v0.1.0 tag, so this checks
+      # the packaging; the working tree is covered by the test step above.
+      - name: Give the builder user the checkout
         run: chown -R builder:builder "$GITHUB_WORKSPACE"
 
       - name: Read the PKGBUILD
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > /dev/null"
-
-      - name: Check the tools as the builder user
-        run: su - builder -c "id && command -v git cmake gcc python makepkg && git --version"
-
-      - name: Check the git sources as the builder user
-        run: su - builder -c "git ls-remote https://github.com/DevJysh/Rivet.git refs/tags/v0.1.0 && git ls-remote https://github.com/aardappel/goose.git refs/tags/v2026.4"
-
-      - name: Clone the Rivet mirror as the builder user
-        run: su - builder -c "rm -rf /tmp/mirror-test && git clone --mirror https://github.com/DevJysh/Rivet.git /tmp/mirror-test"
-
-      - name: Fetch the sources with the cache outside the workspace
-        run: su - builder -c "mkdir -p /tmp/srcdest && cd '$GITHUB_WORKSPACE' && SRCDEST=/tmp/srcdest makepkg -o --noconfirm"
 
       - name: Fetch the sources
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -o --noconfirm"
