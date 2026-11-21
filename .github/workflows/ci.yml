@@ -60,6 +60,12 @@ jobs:
       - name: Read the PKGBUILD
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > /dev/null"
 
+      - name: Check the tools as the builder user
+        run: su - builder -c "id && command -v git cmake gcc python makepkg && git --version"
+
+      - name: Check the git sources as the builder user
+        run: su - builder -c "git ls-remote https://github.com/DevJysh/Rivet.git refs/tags/v0.1.0 && git ls-remote https://github.com/aardappel/goose.git refs/tags/v2026.4"
+
       - name: Fetch the sources
         run: su - builder -c "cd '$GITHUB_WORKSPACE' && makepkg -o --noconfirm"
 
